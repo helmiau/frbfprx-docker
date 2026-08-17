@@ -122,19 +122,26 @@ jobs:
           REGISTRIES="[]"
           IMAGE_TAGS=""
 
+          echo "🔍 DEBUG: DOCKERHUB_ENABLED=$DOCKERHUB_ENABLED"
+          echo "🔍 DEBUG: DOCKERHUB_USERNAME=$DOCKERHUB_USERNAME"
+          echo "🔍 DEBUG: GITHUB_REPOSITORY_OWNER=$GITHUB_REPOSITORY_OWNER"
+
           if [ "$DOCKERHUB_ENABLED" = "true" ]; then
             DH_NAME=$(echo "$CONFIG" | jq -r '.registry.dockerhub.image_name')
+            echo "🔍 DEBUG: DH_NAME=$DH_NAME"
             REGISTRIES=$(echo "$REGISTRIES" | jq --arg r "$DOCKERHUB_USERNAME/$DH_NAME" '. + [$r]')
             IMAGE_TAGS="$IMAGE_TAGS,$DOCKERHUB_USERNAME/$DH_NAME:$DOCKER_TAG,$DOCKERHUB_USERNAME/$DH_NAME:latest"
           fi
 
           if [ "$GHCR_ENABLED" = "true" ]; then
             GH_NAME=$(echo "$CONFIG" | jq -r '.registry.ghcr.image_name')
+            echo "🔍 DEBUG: GH_NAME=$GH_NAME"
             REGISTRIES=$(echo "$REGISTRIES" | jq --arg r "ghcr.io/$GITHUB_REPOSITORY_OWNER/$GH_NAME" '. + [$r]')
             IMAGE_TAGS="$IMAGE_TAGS,ghcr.io/$GITHUB_REPOSITORY_OWNER/$GH_NAME:$DOCKER_TAG,ghcr.io/$GITHUB_REPOSITORY_OWNER/$GH_NAME:latest"
           fi
 
           IMAGE_TAGS="${IMAGE_TAGS#,}"
+          echo "🔍 DEBUG: IMAGE_TAGS=$IMAGE_TAGS"
           echo "image_tags=$IMAGE_TAGS" >> $GITHUB_OUTPUT
           echo "registries=$(echo "$REGISTRIES" | jq -c .)" >> $GITHUB_OUTPUT
 
