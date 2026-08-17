@@ -1,0 +1,62 @@
+{
+  "_schema": "freebuff-proxy-builder-config-v1",
+  "version": "1.1.0",
+  "project": {
+    "name": "freebuff-proxy-docker",
+    "description": "Auto-build Docker images for trefeon/freebuff-proxy without forking upstream",
+    "upstream": {
+      "repo": "trefeon/freebuff-proxy",
+      "branch": "main"
+    }
+  },
+  "build": {
+    "use_upstream_dockerfile": true,
+    "platforms": ["linux/amd64", "linux/arm64"],
+    "tag_prefix": "v",
+    "use_exact_semver": true,
+    "cache_enabled": true,
+    "latest_always_newest": true
+  },
+  "registry": {
+    "dockerhub": {
+      "enabled": true,
+      "username": "${DOCKERHUB_USERNAME}",
+      "image_name": "freebuff-proxy-docker"
+    },
+    "ghcr": {
+      "enabled": false,
+      "username": "${GITHUB_REPOSITORY_OWNER}",
+      "image_name": "freebuff-proxy-docker"
+    }
+  },
+  "notifications": {
+    "enabled": true,
+    "mode": "both",
+    "_mode_help": "Options: 'success' | 'failure' | 'both' | 'quiet'",
+    "discord": {
+      "enabled": false,
+      "webhook_url": "${DISCORD_WEBHOOK_URL}"
+    },
+    "slack": {
+      "enabled": false,
+      "webhook_url": "${SLACK_WEBHOOK_URL}"
+    },
+    "telegram": {
+      "enabled": true,
+      "bot_token": "${TELEGRAM_BOT_TOKEN}",
+      "chat_id": "${TELEGRAM_CHAT_ID}"
+    }
+  },
+  "mirror": {
+    "enabled": true,
+    "mode": "all",
+    "_mode_help": "Options: 'all' | 'source-only' | 'checksums-only'",
+    "create_github_release": true,
+    "include_checksums": true,
+    "release_prefix": "mirror-"
+  },
+  "schedule": {
+    "check_interval": "0 */6 * * *",
+    "timezone": "UTC"
+  }
+}

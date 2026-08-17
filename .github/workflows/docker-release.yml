@@ -1,0 +1,387 @@
+name: 🐳 Docker Release Builder
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force build even if version exists'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+  push:
+    branches: [main]
+    paths:
+      - 'config.json'
+      - '.github/workflows/docker-release.yml'
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  BUILDER_VERSION: "1.1.0"
+
+jobs:
+  # ============================================================================
+  # STAGE 1: Configure — Read config & check upstream
+  # ============================================================================
+  configure:
+    runs-on: ubuntu-latest
+    outputs:
+      config: ${{ steps.read-config.outputs.config }}
+      should_build: ${{ steps.check.outputs.should_build }}
+      upstream_version: ${{ steps.check.outputs.upstream_version }}
+      upstream_tag: ${{ steps.check.outputs.upstream_tag }}
+      upstream_tarball: ${{ steps.check.outputs.upstream_tarball }}
+      upstream_zipball: ${{ steps.check.outputs.upstream_zipball }}
+      image_tags: ${{ steps.check.outputs.image_tags }}
+      registries: ${{ steps.check.outputs.registries }}
+      notifications: ${{ steps.check.outputs.notifications }}
+      notify_mode: ${{ steps.check.outputs.notify_mode }}
+      mirror: ${{ steps.check.outputs.mirror }}
+      mirror_mode: ${{ steps.check.outputs.mirror_mode }}
+      cache_enabled: ${{ steps.check.outputs.cache_enabled }}
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 📖 Read config.json
+        id: read-config
+        run: |
+          CONFIG=$(cat config.json | jq -c .)
+          echo "config=$CONFIG" >> $GITHUB_OUTPUT
+
+          echo "📋 Builder version: $(echo $CONFIG | jq -r '.version')"
+          echo "🔧 Upstream: $(echo $CONFIG | jq -r '.project.upstream.repo')"
+          echo "🏷️  Exact semver: $(echo $CONFIG | jq -r '.build.use_exact_semver')"
+          echo "📦 DockerHub: $(echo $CONFIG | jq -r '.registry.dockerhub.enabled')"
+          echo "📦 GHCR: $(echo $CONFIG | jq -r '.registry.ghcr.enabled')"
+          echo "🔔 Notifications: $(echo $CONFIG | jq -r '.notifications.enabled') (mode: $(echo $CONFIG | jq -r '.notifications.mode'))"
+          echo "📂 Mirror: $(echo $CONFIG | jq -r '.mirror.enabled') (mode: $(echo $CONFIG | jq -r '.mirror.mode'))"
+          echo "💾 Cache: $(echo $CONFIG | jq -r '.build.cache_enabled')"
+
+      - name: 🔍 Check upstream release
+        id: check
+        run: |
+          CONFIG='${{ steps.read-config.outputs.config }}'
+          UPSTREAM_REPO=$(echo "$CONFIG" | jq -r '.project.upstream.repo')
+          USE_SEMVER=$(echo "$CONFIG" | jq -r '.build.use_exact_semver')
+          DOCKERHUB_ENABLED=$(echo "$CONFIG" | jq -r '.registry.dockerhub.enabled')
+          GHCR_ENABLED=$(echo "$CONFIG" | jq -r '.registry.ghcr.enabled')
+          MIRROR_ENABLED=$(echo "$CONFIG" | jq -r '.mirror.enabled')
+          MIRROR_MODE=$(echo "$CONFIG" | jq -r '.mirror.mode')
+          NOTIFY_ENABLED=$(echo "$CONFIG" | jq -r '.notifications.enabled')
+          NOTIFY_MODE=$(echo "$CONFIG" | jq -r '.notifications.mode')
+          CACHE_ENABLED=$(echo "$CONFIG" | jq -r '.build.cache_enabled')
+
+          echo "upstream_repo=$UPSTREAM_REPO" >> $GITHUB_OUTPUT
+          echo "mirror=$MIRROR_ENABLED" >> $GITHUB_OUTPUT
+          echo "mirror_mode=$MIRROR_MODE" >> $GITHUB_OUTPUT
+          echo "notifications=$NOTIFY_ENABLED" >> $GITHUB_OUTPUT
+          echo "notify_mode=$NOTIFY_MODE" >> $GITHUB_OUTPUT
+          echo "cache_enabled=$CACHE_ENABLED" >> $GITHUB_OUTPUT
+
+          # Get latest upstream release
+          echo "🔍 Fetching latest release from $UPSTREAM_REPO..."
+          LATEST=$(curl -sL --fail "https://api.github.com/repos/$UPSTREAM_REPO/releases/latest")
+
+          if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
+            echo "❌ Failed to fetch upstream release"
+            exit 1
+          fi
+
+          TAG_NAME=$(echo "$LATEST" | jq -r '.tag_name')
+          VERSION=${TAG_NAME#v}
+
+          if [ "$USE_SEMVER" = "true" ]; then
+            DOCKER_TAG="$TAG_NAME"
+          else
+            DOCKER_TAG="$VERSION"
+          fi
+
+          echo "upstream_version=$VERSION" >> $GITHUB_OUTPUT
+          echo "upstream_tag=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "upstream_tarball=$(echo "$LATEST" | jq -r '.tarball_url')" >> $GITHUB_OUTPUT
+          echo "upstream_zipball=$(echo "$LATEST" | jq -r '.zipball_url')" >> $GITHUB_OUTPUT
+
+          # Build registry targets
+          REGISTRIES="[]"
+          IMAGE_TAGS=""
+
+          if [ "$DOCKERHUB_ENABLED" = "true" ]; then
+            DH_USER=$(echo "$CONFIG" | jq -r '.registry.dockerhub.username' | envsubst)
+            DH_NAME=$(echo "$CONFIG" | jq -r '.registry.dockerhub.image_name')
+            REGISTRIES=$(echo "$REGISTRIES" | jq --arg r "$DH_USER/$DH_NAME" '. + [$r]')
+            IMAGE_TAGS="$IMAGE_TAGS,$DH_USER/$DH_NAME:$DOCKER_TAG,$DH_USER/$DH_NAME:latest"
+          fi
+
+          if [ "$GHCR_ENABLED" = "true" ]; then
+            GH_USER=$(echo "$CONFIG" | jq -r '.registry.ghcr.username' | envsubst)
+            GH_NAME=$(echo "$CONFIG" | jq -r '.registry.ghcr.image_name')
+            REGISTRIES=$(echo "$REGISTRIES" | jq --arg r "ghcr.io/$GH_USER/$GH_NAME" '. + [$r]')
+            IMAGE_TAGS="$IMAGE_TAGS,ghcr.io/$GH_USER/$GH_NAME:$DOCKER_TAG,ghcr.io/$GH_USER/$GH_NAME:latest"
+          fi
+
+          IMAGE_TAGS="${IMAGE_TAGS#,}"
+          echo "image_tags=$IMAGE_TAGS" >> $GITHUB_OUTPUT
+          echo "registries=$(echo "$REGISTRIES" | jq -c .)" >> $GITHUB_OUTPUT
+
+          # Check if images already exist (skip if force_build)
+          if [ "${{ github.event.inputs.force_build }}" = "true" ]; then
+            echo "⚡ Force build requested"
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          EXISTS=false
+          for REG in $(echo "$REGISTRIES" | jq -r '.[]'); do
+            CHECK_TAG=$(echo "$REG" | sed "s/:latest/:$DOCKER_TAG/")
+            REPO_PART=$(echo "$CHECK_TAG" | cut -d: -f1)
+
+            if [[ "$CHECK_TAG" == ghcr.io/* ]]; then
+              PKG_PATH=$(echo "$REPO_PART" | sed 's|ghcr.io/||')
+              PKG_OWNER=$(echo "$PKG_PATH" | cut -d/ -f1)
+              PKG_NAME=$(echo "$PKG_PATH" | cut -d/ -f2)
+              # Check if the specific tag exists among package versions
+              VERSIONS=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/users/$PKG_OWNER/packages/container/$PKG_NAME/versions")
+              if echo "$VERSIONS" | jq -e --arg t "$DOCKER_TAG" '.[] | select(.metadata.container.tags[]? == $t) | .id' > /dev/null 2>&1; then
+                EXISTS=true
+              fi
+            else
+              HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}"                 "https://hub.docker.com/v2/repositories/$REPO_PART/tags/$DOCKER_TAG")
+              if [ "$HTTP_STATUS" = "200" ]; then EXISTS=true; fi
+            fi
+          done
+
+          if [ "$EXISTS" = "true" ]; then
+            echo "⏭️  Image $DOCKER_TAG already exists in registry"
+            echo "should_build=false" >> $GITHUB_OUTPUT
+          else
+            echo "🆕 New release detected: $TAG_NAME (tag: $DOCKER_TAG)"
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          fi
+
+  # ============================================================================
+  # STAGE 2: Build — Download source & build multi-arch image
+  # ============================================================================
+  build:
+    needs: configure
+    if: needs.configure.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout builder repo
+        uses: actions/checkout@v4
+
+      - name: 📥 Download upstream source
+        run: |
+          CONFIG='${{ needs.configure.outputs.config }}'
+          TARBALL="${{ needs.configure.outputs.upstream_tarball }}"
+          TAG="${{ needs.configure.outputs.upstream_tag }}"
+
+          echo "📥 Downloading $TAG from upstream..."
+          curl -sL "$TARBALL" -o upstream.tar.gz
+          tar -xzf upstream.tar.gz --strip-components=1
+          rm upstream.tar.gz
+
+          echo "📁 Source tree:"
+          ls -la
+
+          USE_UPSTREAM=$(echo "$CONFIG" | jq -r '.build.use_upstream_dockerfile')
+          if [ "$USE_UPSTREAM" != "true" ] && [ -f "Dockerfile.custom" ]; then
+            mv Dockerfile.custom Dockerfile
+            echo "🔧 Using custom Dockerfile"
+          else
+            echo "🔧 Using upstream Dockerfile"
+          fi
+
+      - name: 🔧 Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: 🔧 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🔐 Login to Docker Hub
+        if: fromJson(needs.configure.outputs.config).registry.dockerhub.enabled == true
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 🔐 Login to GHCR
+        if: fromJson(needs.configure.outputs.config).registry.ghcr.enabled == true
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🐳 Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: ${{ join(fromJson(needs.configure.outputs.config).build.platforms, ',') }}
+          push: true
+          tags: ${{ needs.configure.outputs.image_tags }}
+          cache-from: ${{ needs.configure.outputs.cache_enabled == 'true' && 'type=gha' || '' }}
+          cache-to: ${{ needs.configure.outputs.cache_enabled == 'true' && 'type=gha,mode=max' || '' }}
+          build-args: |
+            VERSION=${{ needs.configure.outputs.upstream_version }}
+
+      - name: ✅ Build success
+        if: success()
+        run: |
+          echo "BUILD_STATUS=success" >> $GITHUB_ENV
+          echo "✅ Build completed successfully"
+
+      - name: ❌ Build failure
+        if: failure()
+        run: |
+          echo "BUILD_STATUS=failure" >> $GITHUB_ENV
+          echo "❌ Build failed"
+
+  # ============================================================================
+  # STAGE 3: Mirror — Mirror upstream release assets to GitHub Releases
+  # ============================================================================
+  mirror:
+    needs: [configure, build]
+    if: needs.configure.outputs.mirror == 'true' && needs.configure.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Download upstream release assets
+        run: |
+          CONFIG='${{ needs.configure.outputs.config }}'
+          UPSTREAM_REPO=$(echo "$CONFIG" | jq -r '.project.upstream.repo')
+          TAG="${{ needs.configure.outputs.upstream_tag }}"
+          MIRROR_MODE=$(echo "$CONFIG" | jq -r '.mirror.mode')
+
+          echo "📥 Downloading release assets from $UPSTREAM_REPO@$TAG (mode: $MIRROR_MODE)..."
+
+          RELEASE=$(curl -sL "https://api.github.com/repos/$UPSTREAM_REPO/releases/tags/$TAG")
+          mkdir -p mirror-assets
+
+          if [ "$MIRROR_MODE" = "all" ]; then
+            # Download all assets
+            ASSETS=$(echo "$RELEASE" | jq -r '.assets[] | "\(.name)|\(.browser_download_url)"')
+            while IFS='|' read -r name url; do
+              [ -z "$name" ] && continue
+              echo "  ↳ $name"
+              curl -sL "$url" -o "mirror-assets/$name"
+            done <<< "$ASSETS"
+            # Also include source
+            curl -sL "https://api.github.com/repos/$UPSTREAM_REPO/tarball/$TAG" -o "mirror-assets/source-$TAG.tar.gz"
+
+          elif [ "$MIRROR_MODE" = "source-only" ]; then
+            # Only source code
+            curl -sL "https://api.github.com/repos/$UPSTREAM_REPO/tarball/$TAG" -o "mirror-assets/source-$TAG.tar.gz"
+            curl -sL "https://api.github.com/repos/$UPSTREAM_REPO/zipball/$TAG" -o "mirror-assets/source-$TAG.zip"
+
+          elif [ "$MIRROR_MODE" = "checksums-only" ]; then
+            # Only checksums file
+            CHECKSUM_URL=$(echo "$RELEASE" | jq -r '.assets[] | select(.name == "checksums.txt") | .browser_download_url')
+            if [ -n "$CHECKSUM_URL" ] && [ "$CHECKSUM_URL" != "null" ]; then
+              curl -sL "$CHECKSUM_URL" -o "mirror-assets/checksums.txt"
+            else
+              echo "⚠️  No checksums.txt found in upstream release"
+            fi
+          fi
+
+          echo "📁 Mirrored assets:"
+          ls -la mirror-assets/
+
+      - name: 🏷️ Prepare mirror release body
+        id: mirror-body
+        run: |
+          chmod +x "${GITHUB_WORKSPACE}/scripts/mirror-body.sh"
+          BODY=$(bash "${GITHUB_WORKSPACE}/scripts/mirror-body.sh" \
+            '${{ needs.configure.outputs.config }}' \
+            '${{ needs.configure.outputs.upstream_tag }}' \
+            '${{ env.BUILDER_VERSION }}')
+          echo "body<<BODYDELIM" >> $GITHUB_OUTPUT
+          echo "$BODY" >> $GITHUB_OUTPUT
+          echo "BODYDELIM" >> $GITHUB_OUTPUT
+
+      - name: 🏷️ Create mirror release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ fromJson(needs.configure.outputs.config).mirror.release_prefix }}${{ needs.configure.outputs.upstream_tag }}
+          name: Mirror ${{ needs.configure.outputs.upstream_tag }}
+          body: ${{ steps.mirror-body.outputs.body }}
+          files: mirror-assets/*
+          draft: false
+          prerelease: false
+
+  # ============================================================================
+  # STAGE 4: Notify — Send notifications based on config mode
+  # ============================================================================
+  notify:
+    needs: [configure, build, mirror]
+    if: |
+      always() && 
+      needs.configure.outputs.should_build == 'true' &&
+      needs.configure.outputs.notifications == 'true' &&
+      (
+        (needs.configure.outputs.notify_mode == 'both') ||
+        (needs.configure.outputs.notify_mode == 'success' && needs.build.result == 'success') ||
+        (needs.configure.outputs.notify_mode == 'failure' && needs.build.result == 'failure')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📋 Prepare notification payload
+        id: payload
+        run: |
+          chmod +x "${GITHUB_WORKSPACE}/scripts/notify-payload.sh"
+          PAYLOAD=$(bash "${GITHUB_WORKSPACE}/scripts/notify-payload.sh" \
+            '${{ needs.configure.outputs.config }}' \
+            '${{ needs.configure.outputs.upstream_tag }}' \
+            '${{ needs.build.result }}' \
+            '${{ needs.mirror.result }}' \
+            '${{ needs.configure.outputs.notify_mode }}' \
+            '${{ github.repository }}' \
+            '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}')
+          echo "payload=$PAYLOAD" >> $GITHUB_OUTPUT
+
+      # -------------------------------------------------------------------------
+      # Send notifications via script
+      # -------------------------------------------------------------------------
+      - name: 🔔 Send notifications
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          BUILDER_VERSION: ${{ env.BUILDER_VERSION }}
+        run: |
+          chmod +x "${GITHUB_WORKSPACE}/scripts/notify.sh"
+          CONFIG='${{ needs.configure.outputs.config }}'
+          PAYLOAD='${{ steps.payload.outputs.payload }}'
+
+          for PROVIDER in discord slack telegram; do
+            ENABLED=$(echo "$CONFIG" | jq -r ".notifications.${PROVIDER}.enabled")
+            if [ "$ENABLED" = "true" ]; then
+              echo "📤 Sending $PROVIDER notification..."
+              bash "${GITHUB_WORKSPACE}/scripts/notify.sh" "$PROVIDER" "$PAYLOAD" || echo "⚠️ $PROVIDER notification failed (non-blocking)"
+            else
+              echo "⏭️ $PROVIDER disabled, skipping"
+            fi
+          done
+
+  # ============================================================================
+  # STAGE 5: Skip Summary
+  # ============================================================================
+  skip-summary:
+    needs: configure
+    if: needs.configure.outputs.should_build == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: ⏭️ Skip summary
+        run: |
+          echo "⏭️ No new upstream release or image already exists."
+          echo "Upstream: ${{ needs.configure.outputs.upstream_tag }}"
+          echo "Version: ${{ needs.configure.outputs.upstream_version }}"
+          echo ""
+          echo "Next check in 6 hours (or trigger manually)."
