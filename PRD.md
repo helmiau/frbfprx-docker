@@ -1,5 +1,5 @@
 # Product Requirements Document (PRD)
-# freebuff-proxy-docker Builder
+# frbfprx-docker Builder
 
 **Version:** 1.1.0  
 **Date:** 2026-08-17  
@@ -266,6 +266,6 @@ Sistem yang:
 - **Base Image:** Alpine 3.20
 
 ### 9.2 Builder Info
-- **Repo:** `yourusername/freebuff-proxy-docker`
-- **Image Name:** `yourusername/freebuff-proxy-docker`
+- **Repo:** `yourusername/frbfprx-docker`
+- **Image Name:** `yourusername/frbfprx-docker`
 - **Platforms:** linux/amd64, linux/arm64

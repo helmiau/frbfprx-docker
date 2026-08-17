@@ -102,10 +102,11 @@ check_release() {
     echo "└─────────────────────────────────────────┘"
 
     # Check local image
-    if docker images "freebuff-proxy" --format "{{.Tag}}" 2>/dev/null | grep -q "^$DOCKER_TAG$"; then
-        log_ok "Image freebuff-proxy:$DOCKER_TAG exists locally"
+    PROJECT_NAME=$(echo "$CONFIG" | jq -r '.project.name')
+    if docker images "$PROJECT_NAME" --format "{{.Tag}}" 2>/dev/null | grep -q "^$DOCKER_TAG$"; then
+        log_ok "Image $PROJECT_NAME:$DOCKER_TAG exists locally"
     else
-        log_warn "Image freebuff-proxy:$DOCKER_TAG not found locally"
+        log_warn "Image $PROJECT_NAME:$DOCKER_TAG not found locally"
     fi
 }
 
@@ -132,18 +133,18 @@ build_local() {
     tar -xzf "$TMPDIR/upstream.tar.gz" --strip-components=1 -C "$TMPDIR"
     rm "$TMPDIR/upstream.tar.gz"
 
-    log_info "Building image (tag: freebuff-proxy:$DOCKER_TAG)"
+    log_info "Building image (tag: $PROJECT_NAME:$DOCKER_TAG)"
     log_info "Platforms: $PLATFORMS"
     log_info "Cache: $CACHE"
 
     cd "$TMPDIR"
 
     # For local build, only build current platform
-    docker build -t "freebuff-proxy:$DOCKER_TAG" -t "freebuff-proxy:latest" .
+    docker build -t "$PROJECT_NAME:$DOCKER_TAG" -t "$PROJECT_NAME:latest" .
 
     log_ok "Build complete!"
     echo ""
-    docker images "freebuff-proxy" --format "  • {{.Repository}}:{{.Tag}} ({{.Size}})"
+    docker images "$PROJECT_NAME" --format "  • {{.Repository}}:{{.Tag}} ({{.Size}})"
 
     rm -rf "$TMPDIR"
 }
@@ -160,6 +161,7 @@ build_and_push() {
     build_local
 
     CONFIG=$(load_config)
+    PROJECT_NAME=$(echo "$CONFIG" | jq -r '.project.name')
     USE_SEMVER=$(echo "$CONFIG" | jq -r '.build.use_exact_semver')
     TAG=$(curl -sL "https://api.github.com/repos/$(echo "$CONFIG" | jq -r '.project.upstream.repo')/releases/latest" | jq -r '.tag_name')
     [ "$USE_SEMVER" = "true" ] && DOCKER_TAG="$TAG" || DOCKER_TAG="${TAG#v}"
@@ -169,8 +171,8 @@ build_and_push() {
         USER=$(echo "$CONFIG" | jq -r '.registry.dockerhub.username')
         NAME=$(echo "$CONFIG" | jq -r '.registry.dockerhub.image_name')
         log_info "Pushing to Docker Hub ($USER/$NAME)..."
-        docker tag "freebuff-proxy:$DOCKER_TAG" "$USER/$NAME:$DOCKER_TAG"
-        docker tag "freebuff-proxy:$DOCKER_TAG" "$USER/$NAME:latest"
+        docker tag "$PROJECT_NAME:$DOCKER_TAG" "$USER/$NAME:$DOCKER_TAG"
+        docker tag "$PROJECT_NAME:$DOCKER_TAG" "$USER/$NAME:latest"
         docker push "$USER/$NAME:$DOCKER_TAG"
         docker push "$USER/$NAME:latest"
         log_ok "Docker Hub push complete!"
@@ -181,8 +183,8 @@ build_and_push() {
         USER=$(echo "$CONFIG" | jq -r '.registry.ghcr.username')
         NAME=$(echo "$CONFIG" | jq -r '.registry.ghcr.image_name')
         log_info "Pushing to GHCR (ghcr.io/$USER/$NAME)..."
-        docker tag "freebuff-proxy:$DOCKER_TAG" "ghcr.io/$USER/$NAME:$DOCKER_TAG"
-        docker tag "freebuff-proxy:$DOCKER_TAG" "ghcr.io/$USER/$NAME:latest"
+        docker tag "$PROJECT_NAME:$DOCKER_TAG" "ghcr.io/$USER/$NAME:$DOCKER_TAG"
+        docker tag "$PROJECT_NAME:$DOCKER_TAG" "ghcr.io/$USER/$NAME:latest"
         docker push "ghcr.io/$USER/$NAME:$DOCKER_TAG"
         docker push "ghcr.io/$USER/$NAME:latest"
         log_ok "GHCR push complete!"

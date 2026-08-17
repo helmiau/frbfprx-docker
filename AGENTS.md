@@ -1,5 +1,5 @@
 # AGENTS.md
-# freebuff-proxy-docker Builder
+# frbfprx-docker Builder
 
 **Version:** 1.1.0  
 **Purpose:** Agent instruction and context for AI assistants working on this project  
@@ -237,7 +237,7 @@ Before submitting changes:
 - **Dockerfile:** Valid, multi-stage build
 
 ### Builder Details
-- **Image Name:** `freebuff-proxy-docker`
+- **Image Name:** `frbfprx-docker`
 - **Platforms:** linux/amd64, linux/arm64
 - **Schedule:** Every 6 hours (configurable)
 - **Builder Version:** 1.1.0

@@ -1,4 +1,4 @@
-# 🐳 freebuff-proxy-docker
+# 🐳 frbfprx-docker
 
 Auto-build Docker images for [trefeon/freebuff-proxy](https://github.com/trefeon/freebuff-proxy) on every new upstream release **without forking upstream**.
 
@@ -19,7 +19,7 @@ Auto-build Docker images for [trefeon/freebuff-proxy](https://github.com/trefeon
 
 ### 1. Create Repository
 
-Create a new repository on GitHub (e.g., `yourusername/freebuff-proxy-docker`) and copy these files into it:
+Create a new repository on GitHub (e.g., `yourusername/frbfprx-docker`) and copy these files into it:
 
 ```
 .github/workflows/docker-release.yml
@@ -41,7 +41,7 @@ At minimum, update these fields:
     "dockerhub": {
       "enabled": true,
       "username": "${DOCKERHUB_USERNAME}",
-      "image_name": "freebuff-proxy-docker"
+      "image_name": "frbfprx-docker"
     }
   }
 }
@@ -189,7 +189,7 @@ chmod +x scripts/build.sh scripts/check-release.sh
   "_schema": "freebuff-proxy-builder-config-v1",
   "version": "1.1.0",
   "project": {
-    "name": "freebuff-proxy-docker",
+    "name": "frbfprx-docker",
     "description": "Auto-build Docker images for trefeon/freebuff-proxy",
     "upstream": {
       "repo": "trefeon/freebuff-proxy",
@@ -208,12 +208,12 @@ chmod +x scripts/build.sh scripts/check-release.sh
     "dockerhub": {
       "enabled": true,
       "username": "${DOCKERHUB_USERNAME}",
-      "image_name": "freebuff-proxy-docker"
+      "image_name": "frbfprx-docker"
     },
     "ghcr": {
       "enabled": false,
       "username": "${GITHUB_REPOSITORY_OWNER}",
-      "image_name": "freebuff-proxy-docker"
+      "image_name": "frbfprx-docker"
     }
   },
   "notifications": {
