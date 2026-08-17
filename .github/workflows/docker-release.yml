@@ -123,14 +123,14 @@ jobs:
           IMAGE_TAGS=""
 
           if [ "$DOCKERHUB_ENABLED" = "true" ]; then
-            DH_USER=$(echo "$CONFIG" | jq -r --arg u "$DOCKERHUB_USERNAME" '.registry.dockerhub.username' | sed "s|\${DOCKERHUB_USERNAME}|$DOCKERHUB_USERNAME|g")
+            DH_USER="${DOCKERHUB_USERNAME}"
             DH_NAME=$(echo "$CONFIG" | jq -r '.registry.dockerhub.image_name')
             REGISTRIES=$(echo "$REGISTRIES" | jq --arg r "$DH_USER/$DH_NAME" '. + [$r]')
             IMAGE_TAGS="$IMAGE_TAGS,$DH_USER/$DH_NAME:$DOCKER_TAG,$DH_USER/$DH_NAME:latest"
           fi
 
           if [ "$GHCR_ENABLED" = "true" ]; then
-            GH_USER=$(echo "$CONFIG" | jq -r --arg u "$GITHUB_REPOSITORY_OWNER" '.registry.ghcr.username' | sed "s|\${GITHUB_REPOSITORY_OWNER}|$GITHUB_REPOSITORY_OWNER|g")
+            GH_USER="${GITHUB_REPOSITORY_OWNER}"
             GH_NAME=$(echo "$CONFIG" | jq -r '.registry.ghcr.image_name')
             REGISTRIES=$(echo "$REGISTRIES" | jq --arg r "ghcr.io/$GH_USER/$GH_NAME" '. + [$r]')
             IMAGE_TAGS="$IMAGE_TAGS,ghcr.io/$GH_USER/$GH_NAME:$DOCKER_TAG,ghcr.io/$GH_USER/$GH_NAME:latest"
