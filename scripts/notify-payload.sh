@@ -30,13 +30,13 @@ fi
 # Build image list
 IMAGES=""
 if [ "$(echo "$CONFIG" | jq -r '.registry.dockerhub.enabled')" = "true" ]; then
-    DH_USER=$(echo "$CONFIG" | jq -r '.registry.dockerhub.username' | envsubst)
+    DH_USER="${DOCKERHUB_USERNAME:-$(echo "$CONFIG" | jq -r '.registry.dockerhub.username')}"
     DH_NAME=$(echo "$CONFIG" | jq -r '.registry.dockerhub.image_name')
     IMAGES="$IMAGES
 📦 Docker Hub: \`$DH_USER/$DH_NAME:$TAG\`"
 fi
 if [ "$(echo "$CONFIG" | jq -r '.registry.ghcr.enabled')" = "true" ]; then
-    GH_USER=$(echo "$CONFIG" | jq -r '.registry.ghcr.username' | envsubst)
+    GH_USER="${GITHUB_REPOSITORY_OWNER:-$(echo "$CONFIG" | jq -r '.registry.ghcr.username')}"
     GH_NAME=$(echo "$CONFIG" | jq -r '.registry.ghcr.image_name')
     IMAGES="$IMAGES
 📦 GHCR: \`ghcr.io/$GH_USER/$GH_NAME:$TAG\`"
