@@ -123,17 +123,15 @@ jobs:
           IMAGE_TAGS=""
 
           if [ "$DOCKERHUB_ENABLED" = "true" ]; then
-            DH_USER="${DOCKERHUB_USERNAME}"
             DH_NAME=$(echo "$CONFIG" | jq -r '.registry.dockerhub.image_name')
-            REGISTRIES=$(echo "$REGISTRIES" | jq --arg r "$DH_USER/$DH_NAME" '. + [$r]')
-            IMAGE_TAGS="$IMAGE_TAGS,$DH_USER/$DH_NAME:$DOCKER_TAG,$DH_USER/$DH_NAME:latest"
+            REGISTRIES=$(echo "$REGISTRIES" | jq --arg r "$DOCKERHUB_USERNAME/$DH_NAME" '. + [$r]')
+            IMAGE_TAGS="$IMAGE_TAGS,$DOCKERHUB_USERNAME/$DH_NAME:$DOCKER_TAG,$DOCKERHUB_USERNAME/$DH_NAME:latest"
           fi
 
           if [ "$GHCR_ENABLED" = "true" ]; then
-            GH_USER="${GITHUB_REPOSITORY_OWNER}"
             GH_NAME=$(echo "$CONFIG" | jq -r '.registry.ghcr.image_name')
-            REGISTRIES=$(echo "$REGISTRIES" | jq --arg r "ghcr.io/$GH_USER/$GH_NAME" '. + [$r]')
-            IMAGE_TAGS="$IMAGE_TAGS,ghcr.io/$GH_USER/$GH_NAME:$DOCKER_TAG,ghcr.io/$GH_USER/$GH_NAME:latest"
+            REGISTRIES=$(echo "$REGISTRIES" | jq --arg r "ghcr.io/$GITHUB_REPOSITORY_OWNER/$GH_NAME" '. + [$r]')
+            IMAGE_TAGS="$IMAGE_TAGS,ghcr.io/$GITHUB_REPOSITORY_OWNER/$GH_NAME:$DOCKER_TAG,ghcr.io/$GITHUB_REPOSITORY_OWNER/$GH_NAME:latest"
           fi
 
           IMAGE_TAGS="${IMAGE_TAGS#,}"
@@ -240,6 +238,9 @@ jobs:
           cache-to: ${{ needs.configure.outputs.cache_enabled == 'true' && 'type=gha,mode=max' || '' }}
           build-args: |
             VERSION=${{ needs.configure.outputs.upstream_version }}
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
 
       - name: ✅ Build success
         if: success()
