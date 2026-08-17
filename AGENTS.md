@@ -211,6 +211,7 @@ Before submitting changes:
 - Check provider-specific `enabled` flag
 - Check if build stage actually ran (not skipped)
 - Check secret values for provider
+- **Auto-skip behavior:** If `DISCORD_WEBHOOK_URL`, `SLACK_WEBHOOK_URL`, `TELEGRAM_BOT_TOKEN`, or `TELEGRAM_CHAT_ID` is empty/not-set, the provider is automatically skipped with a log warning. The workflow continues to completion.
 
 ### Issue: Mirror release empty
 - Check `mirror.enabled` and `mirror.mode`

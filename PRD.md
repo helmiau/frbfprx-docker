@@ -55,7 +55,7 @@ Sistem yang:
 | FR-04 | Push ke GitHub Container Registry (GHCR) | P1 | ✅ |
 | FR-05 | Tag image mengikuti semver upstream (`v0.9.7`) | P1 | ✅ |
 | FR-06 | Tag `latest` selalu mengikuti rilis terbaru | P1 | ✅ |
-| FR-07 | Notifikasi Discord/Slack/Telegram | P2 | ✅ |
+| FR-07 | Notifikasi Discord/Slack/Telegram (auto-skip jika secret kosong) | P2 | ✅ |
 | FR-08 | Mirror release upstream ke GitHub Releases | P2 | ✅ |
 | FR-09 | Konfigurasi sentral via `config.json` | P0 | ✅ |
 | FR-10 | CLI untuk local build dan config management | P2 | ✅ |

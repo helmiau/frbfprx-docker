@@ -25,6 +25,12 @@ BUILDER_VER="${BUILDER_VERSION:-1.1.0}"
 
 case "$PROVIDER" in
     discord)
+        if [ -z "${DISCORD_WEBHOOK_URL:-}" ] || [ "$DISCORD_WEBHOOK_URL" = "" ]; then
+            echo "⚠️ DISCORD_WEBHOOK_URL is empty or not set, skipping Discord notification"
+            exit 0
+        fi
+        echo "  ℹ️  Webhook URL configured, sending..."
+
         if [ "$STATUS" = "SUCCESS" ]; then
             COLOR=3066993
         else
@@ -53,12 +59,19 @@ case "$PROVIDER" in
               }]
             }')
 
-        curl -sL -X POST "$DISCORD_WEBHOOK_URL" \
+        HTTP_CODE=$(curl -sL -o /dev/null -w "%{http_code}" -X POST "$DISCORD_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD_JSON"
+            -d "$PAYLOAD_JSON")
+        echo "  ℹ️  Discord responded with HTTP $HTTP_CODE"
         ;;
 
     slack)
+        if [ -z "${SLACK_WEBHOOK_URL:-}" ] || [ "$SLACK_WEBHOOK_URL" = "" ]; then
+            echo "⚠️ SLACK_WEBHOOK_URL is empty or not set, skipping Slack notification"
+            exit 0
+        fi
+        echo "  ℹ️  Webhook URL configured, sending..."
+
         if [ "$STATUS" = "SUCCESS" ]; then
             EMOJI="✅"
             COLOR="#36a64f"
@@ -92,12 +105,23 @@ case "$PROVIDER" in
               }]
             }')
 
-        curl -sL -X POST "$SLACK_WEBHOOK_URL" \
+        HTTP_CODE=$(curl -sL -o /dev/null -w "%{http_code}" -X POST "$SLACK_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD_JSON"
+            -d "$PAYLOAD_JSON")
+        echo "  ℹ️  Slack responded with HTTP $HTTP_CODE"
         ;;
 
     telegram)
+        if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ "$TELEGRAM_BOT_TOKEN" = "" ]; then
+            echo "⚠️ TELEGRAM_BOT_TOKEN is empty or not set, skipping Telegram notification"
+            exit 0
+        fi
+        if [ -z "${TELEGRAM_CHAT_ID:-}" ] || [ "$TELEGRAM_CHAT_ID" = "" ]; then
+            echo "⚠️ TELEGRAM_CHAT_ID is empty or not set, skipping Telegram notification"
+            exit 0
+        fi
+        echo "  ℹ️  Bot token and chat ID configured, sending..."
+
         if [ "$STATUS" = "SUCCESS" ]; then
             EMOJI="✅"
         else
@@ -118,11 +142,12 @@ ${IMAGES_BULLETS}
 
 <i>Builder v${BUILDER_VER}</i>"
 
-        curl -sL -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+        HTTP_CODE=$(curl -sL -o /dev/null -w "%{http_code}" -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -d "chat_id=${TELEGRAM_CHAT_ID}" \
             -d "parse_mode=HTML" \
             --data-urlencode "text=${MESSAGE}" \
-            -d "disable_web_page_preview=true"
+            -d "disable_web_page_preview=true")
+        echo "  ℹ️  Telegram responded with HTTP $HTTP_CODE"
         ;;
 
     *)

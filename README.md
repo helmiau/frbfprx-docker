@@ -53,14 +53,14 @@ At minimum, update these fields:
 
 Go to **Settings → Secrets and variables → Actions → New repository secret**:
 
-| Secret | Required For | How to Get |
-|--------|-------------|------------|
-| `DOCKERHUB_USERNAME` | Docker Hub | Your Docker Hub username |
-| `DOCKERHUB_TOKEN` | Docker Hub | [Create access token](https://hub.docker.com/settings/security) |
-| `TELEGRAM_BOT_TOKEN` | Telegram | See [Telegram Setup Guide](#-telegram-setup-guide) below |
-| `TELEGRAM_CHAT_ID` | Telegram | See [Telegram Setup Guide](#-telegram-setup-guide) below |
-| `DISCORD_WEBHOOK_URL` | Discord | Server Settings → Integrations → Webhooks |
-| `SLACK_WEBHOOK_URL` | Slack | [Incoming Webhooks](https://api.slack.com/messaging/webhooks) |
+| Secret | Required For | How to Get | Status |
+|--------|-------------|------------|--------|
+| `DOCKERHUB_USERNAME` | Docker Hub | Your Docker Hub username | **Required** |
+| `DOCKERHUB_TOKEN` | Docker Hub | [Create access token](https://hub.docker.com/settings/security) | **Required** |
+| `TELEGRAM_BOT_TOKEN` | Telegram | See [Telegram Setup Guide](#-telegram-setup-guide) below | Optional |
+| `TELEGRAM_CHAT_ID` | Telegram | See [Telegram Setup Guide](#-telegram-setup-guide) below | Optional |
+| `DISCORD_WEBHOOK_URL` | Discord | Server Settings → Integrations → Webhooks | Optional |
+| `SLACK_WEBHOOK_URL` | Slack | [Incoming Webhooks](https://api.slack.com/messaging/webhooks) | Optional |
 
 ### 4. Enable GitHub Actions
 
@@ -156,6 +156,25 @@ You should receive the message in Telegram.
 | `failure` | Only when build fails | Alert on errors (quiet) |
 | `both` | Always | Full visibility (default) |
 | `quiet` | Never | Silent operation |
+
+### Missing/Invalid Secrets Handling
+
+Notifikasi bersifat **non-blocking dan auto-skip**. Jika salah satu dari `DISCORD_WEBHOOK_URL`, `SLACK_WEBHOOK_URL`, `TELEGRAM_BOT_TOKEN`, atau `TELEGRAM_CHAT_ID` kosong, tidak di-set, atau response API invalid (non-2xx), maka:
+
+1. Provider tersebut **di-skip otomatis** tanpa gagalkan workflow
+2. Informasi lengkap tetap **di-log di GitHub Actions** (misal: `⚠️ TELEGRAM_BOT_TOKEN is empty or not set, skipping`)
+3. Provider lain yang valid tetap jalan
+4. Build, push, dan mirror **tetap berjalan sampai selesai**
+
+Contoh output log saat secret tidak lengkap:
+
+```
+📤 Sending discord notification...
+  ⚠️ DISCORD_WEBHOOK_URL is empty or not set, skipping Discord notification
+📤 Sending telegram notification...
+  ℹ️  Bot token and chat ID configured, sending...
+  ℹ️  Telegram responded with HTTP 200
+```
 
 ---
 
