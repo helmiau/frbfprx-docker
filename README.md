@@ -64,9 +64,17 @@ Go to **Settings → Secrets and variables → Actions → New repository secret
 
 ### 4. Enable GitHub Actions
 
-Workflows run automatically every 6 hours. To trigger manually:
+This project uses multiple triggers to stay up-to-date with upstream:
 
-**Actions → Docker Release Builder → Run workflow**
+| Trigger | Workflow | Interval | Description |
+|---------|----------|----------|-------------|
+| **Upstream Watcher** | `upstream-watcher.yml` | Every 10 minutes | Polls `trefeon/freebuff-proxy` releases; dispatches `upstream-release` event if a new tag is missing in registries |
+| **Scheduled Build** | `docker-release.yml` | Every 3 hours | Fallback polling — builds if image is missing |
+| **Repository Dispatch** | `docker-release.yml` | On-demand | Triggered automatically by the watcher via `upstream-release` event |
+| **Manual Dispatch** | `docker-release.yml` | On-demand | **Actions → Docker Release Builder → Run workflow** (use `force_build: true` to rebuild) |
+| **Config Push** | `docker-release.yml` | On push to `main` | Rebuilds when `config.json` or workflow file changes |
+
+No additional setup is required — the watcher runs automatically once the workflows are enabled. Just push the files and enable Actions.
 
 ---
 
@@ -260,11 +268,19 @@ chmod +x scripts/build.sh scripts/check-release.sh
 ## 🔄 Workflow Stages
 
 ```
+┌──────────────────┐
+│ Upstream Watcher │  every 10 min — polls trefeon/freebuff-proxy
+│  (watcher.yml)   │  dispatches `upstream-release` if new tag found
+└────────┬─────────┘
+         │ repository_dispatch
+         ▼
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
 │  Configure  │ → │    Build    │ → │   Mirror    │ → │   Notify    │
 │  (read cfg) │    │(multi-arch) │    │(GH Release) │    │(Discord/    │
 │  (check ver)│    │             │    │             │    │ Slack/TG)   │
 └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
+         ▲
+         │ also triggered by: schedule (3h) / push / manual dispatch
 ```
 
 ---

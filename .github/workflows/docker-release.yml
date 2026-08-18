@@ -13,6 +13,8 @@ on:
         options:
           - 'false'
           - 'true'
+  repository_dispatch:
+    types: [upstream-release]
   push:
     branches: [main]
     paths:
@@ -22,6 +24,10 @@ on:
 permissions:
   contents: write
   packages: write
+
+concurrency:
+  group: docker-release-${{ github.event.client_payload.tag || github.ref }}
+  cancel-in-progress: false
 
 env:
   BUILDER_VERSION: "1.1.0"
@@ -95,17 +101,27 @@ jobs:
           echo "notify_mode=$NOTIFY_MODE" >> $GITHUB_OUTPUT
           echo "cache_enabled=$CACHE_ENABLED" >> $GITHUB_OUTPUT
 
-          # Get latest upstream release
-          echo "🔍 Fetching latest release from $UPSTREAM_REPO..."
-          LATEST=$(curl -sL --fail "https://api.github.com/repos/$UPSTREAM_REPO/releases/latest")
-
-          if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
-            echo "❌ Failed to fetch upstream release"
-            exit 1
+          # Resolve upstream tag — prefer dispatch payload, fallback to latest API
+          DISPATCH_TAG="${{ github.event.client_payload.tag }}"
+          if [ -n "$DISPATCH_TAG" ] && [ "$DISPATCH_TAG" != "" ]; then
+            echo "📨 Triggered by upstream-release dispatch: $DISPATCH_TAG"
+            TAG_NAME="$DISPATCH_TAG"
+            VERSION=${TAG_NAME#v}
+            LATEST=$(curl -sL --fail "https://api.github.com/repos/$UPSTREAM_REPO/releases/tags/$TAG_NAME")
+            if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
+              echo "❌ Failed to fetch upstream release for tag $TAG_NAME"
+              exit 1
+            fi
+          else
+            echo "🔍 Fetching latest release from $UPSTREAM_REPO..."
+            LATEST=$(curl -sL --fail "https://api.github.com/repos/$UPSTREAM_REPO/releases/latest")
+            if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
+              echo "❌ Failed to fetch upstream release"
+              exit 1
+            fi
+            TAG_NAME=$(echo "$LATEST" | jq -r '.tag_name')
+            VERSION=${TAG_NAME#v}
           fi
-
-          TAG_NAME=$(echo "$LATEST" | jq -r '.tag_name')
-          VERSION=${TAG_NAME#v}
 
           if [ "$USE_SEMVER" = "true" ]; then
             DOCKER_TAG="$TAG_NAME"

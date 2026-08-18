@@ -1,0 +1,135 @@
+name: 👀 Upstream Watcher
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🔍 Check upstream & dispatch if new
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -euo pipefail
+
+          CONFIG=$(cat config.json | jq -c .)
+          UPSTREAM_REPO=$(echo "$CONFIG" | jq -r '.project.upstream.repo')
+          USE_SEMVER=$(echo "$CONFIG" | jq -r '.build.use_exact_semver')
+          DOCKERHUB_ENABLED=$(echo "$CONFIG" | jq -r '.registry.dockerhub.enabled')
+          GHCR_ENABLED=$(echo "$CONFIG" | jq -r '.registry.ghcr.enabled')
+          MIRROR_ENABLED=$(echo "$CONFIG" | jq -r '.mirror.enabled')
+          MIRROR_PREFIX=$(echo "$CONFIG" | jq -r '.mirror.release_prefix // "mirror-"')
+
+          echo "🔍 Checking upstream: $UPSTREAM_REPO"
+
+          LATEST_JSON=$(curl -sL --fail "https://api.github.com/repos/$UPSTREAM_REPO/releases/latest")
+          TAG_NAME=$(echo "$LATEST_JSON" | jq -r '.tag_name')
+
+          if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" = "null" ]; then
+            echo "❌ Failed to fetch upstream tag"
+            exit 1
+          fi
+
+          VERSION=${TAG_NAME#v}
+          if [ "$USE_SEMVER" = "true" ]; then
+            DOCKER_TAG="$TAG_NAME"
+          else
+            DOCKER_TAG="$VERSION"
+          fi
+
+          echo "📌 Upstream latest: $TAG_NAME (docker tag: $DOCKER_TAG)"
+
+          # ── Check if already built ────────────────────────────────────────
+          SHOULD_BUILD="true"
+
+          # 1) Check Docker Hub
+          if [ "$DOCKERHUB_ENABLED" = "true" ] && [ -n "${DOCKERHUB_USERNAME:-}" ]; then
+            DH_IMAGE=$(echo "$CONFIG" | jq -r '.registry.dockerhub.image_name')
+            DH_REPO="$DOCKERHUB_USERNAME/$DH_IMAGE"
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://hub.docker.com/v2/repositories/$DH_REPO/tags/$DOCKER_TAG" || echo "000")
+            echo "🐳 Docker Hub $DH_REPO:$DOCKER_TAG → HTTP $HTTP_CODE"
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "   → exists on Docker Hub"
+              # Don't skip yet — check other registries too
+              DH_EXISTS=true
+            else
+              DH_EXISTS=false
+            fi
+          elif [ "$DOCKERHUB_ENABLED" = "true" ]; then
+            echo "⚠️ DOCKERHUB_USERNAME not set, skipping Docker Hub check"
+            DH_EXISTS=false
+          else
+            DH_EXISTS=true
+          fi
+
+          # 2) Check GHCR
+          if [ "$GHCR_ENABLED" = "true" ]; then
+            GH_IMAGE=$(echo "$CONFIG" | jq -r '.registry.ghcr.image_name')
+            GHCR_REPO="ghcr.io/${{ github.repository_owner }}/$GH_IMAGE"
+            # Use GitHub Packages API — check if tag exists
+            PKG_NAME="$GH_IMAGE"
+            PKG_OWNER="${{ github.repository_owner }}"
+            # GHCR package names are lowercased
+            PKG_OWNER_LC=$(echo "$PKG_OWNER" | tr '[:upper:]' '[:lower:]')
+            PKG_NAME_LC=$(echo "$PKG_NAME" | tr '[:upper:]' '[:lower:]')
+            VERSIONS_JSON=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/users/$PKG_OWNER_LC/packages/container/$PKG_NAME_LC/versions" || echo "[]")
+            if echo "$VERSIONS_JSON" | jq -e --arg t "$DOCKER_TAG" '.[] | select(.metadata.container.tags[]? == $t) | .id' > /dev/null 2>&1; then
+              echo "📦 GHCR $GHCR_REPO:$DOCKER_TAG → exists"
+              GHCR_EXISTS=true
+            else
+              echo "📦 GHCR $GHCR_REPO:$DOCKER_TAG → not found"
+              GHCR_EXISTS=false
+            fi
+          else
+            GHCR_EXISTS=true
+          fi
+
+          # 3) Check mirror release
+          if [ "$MIRROR_ENABLED" = "true" ]; then
+            MIRROR_TAG="${MIRROR_PREFIX}${TAG_NAME}"
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/tags/$MIRROR_TAG" || echo "000")
+            echo "🏷️ Mirror release $MIRROR_TAG → HTTP $HTTP_CODE"
+            if [ "$HTTP_CODE" = "200" ]; then
+              MIRROR_EXISTS=true
+            else
+              MIRROR_EXISTS=false
+            fi
+          else
+            MIRROR_EXISTS=true
+          fi
+
+          # Decide: only skip if ALL enabled targets already exist
+          if [ "$DH_EXISTS" = "true" ] && [ "$GHCR_EXISTS" = "true" ] && [ "$MIRROR_EXISTS" = "true" ]; then
+            echo "✅ $DOCKER_TAG already exists everywhere — no dispatch needed"
+            SHOULD_BUILD="false"
+          else
+            echo "🆕 $DOCKER_TAG is missing in at least one target — will dispatch"
+            SHOULD_BUILD="true"
+          fi
+
+          if [ "$SHOULD_BUILD" != "true" ]; then
+            echo "⏭️ Skipping dispatch"
+            exit 0
+          fi
+
+          echo "🚀 Dispatching upstream-release event for $TAG_NAME ..."
+          gh api "repos/${{ github.repository }}/dispatches" \
+            -f event_type=upstream-release \
+            -f "client_payload[tag]=$TAG_NAME" \
+            -f "client_payload[version]=$VERSION" \
+            -f "client_payload[upstream_repo]=$UPSTREAM_REPO"
+
+          echo "✅ Dispatched upstream-release → $TAG_NAME"
