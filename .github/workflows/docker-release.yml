@@ -290,6 +290,9 @@ jobs:
     if: needs.configure.outputs.mirror == 'true' && needs.configure.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     steps:
+      - name: 📥 Checkout builder repo
+        uses: actions/checkout@v4
+
       - name: 📥 Download upstream release assets
         run: |
           CONFIG='${{ needs.configure.outputs.config }}'
@@ -369,6 +372,9 @@ jobs:
       )
     runs-on: ubuntu-latest
     steps:
+      - name: 📥 Checkout builder repo
+        uses: actions/checkout@v4
+
       - name: 📋 Prepare notification payload
         id: payload
         run: |
