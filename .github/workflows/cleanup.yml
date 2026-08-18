@@ -1,0 +1,152 @@
+name: 🧹 Cleanup Old Workflow Runs
+
+on:
+  schedule:
+    # Every Sunday at 00:00 UTC — once a week
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run — only log, do not delete'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+      days:
+        description: 'Delete runs older than N days'
+        required: false
+        default: '7'
+        type: string
+      keep_minimum:
+        description: 'Keep at least N most recent runs per workflow'
+        required: false
+        default: '3'
+        type: string
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: cleanup-workflow-runs
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🧹 Delete old workflow runs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          RETENTION_DAYS: ${{ inputs.days || '7' }}
+          KEEP_MINIMUM: ${{ inputs.keep_minimum || '3' }}
+        run: |
+          set -euo pipefail
+
+          REPO="${{ github.repository }}"
+          DRY_RUN="${DRY_RUN:-false}"
+          RETENTION_DAYS="${RETENTION_DAYS:-7}"
+          KEEP_MINIMUM="${KEEP_MINIMUM:-3}"
+
+          # Validate numeric inputs
+          if ! [[ "$RETENTION_DAYS" =~ ^[0-9]+$ ]]; then
+            echo "❌ Invalid days value: $RETENTION_DAYS (must be integer)"
+            exit 1
+          fi
+          if ! [[ "$KEEP_MINIMUM" =~ ^[0-9]+$ ]]; then
+            echo "❌ Invalid keep_minimum value: $KEEP_MINIMUM (must be integer)"
+            exit 1
+          fi
+
+          CUTOFF_EPOCH=$(date -d "$RETENTION_DAYS days ago" +%s)
+          CUTOFF_DATE=$(date -d "@$CUTOFF_EPOCH" -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          echo "📋 Repo: $REPO"
+          echo "📅 Retention: $RETENTION_DAYS days (cutoff: $CUTOFF_DATE)"
+          echo "📌 Keep minimum: $KEEP_MINIMUM most recent runs per workflow"
+          echo "🧪 Dry run: $DRY_RUN"
+          echo ""
+
+          # Get all workflow IDs in the repo
+          WORKFLOW_IDS=$(gh api --paginate "repos/$REPO/actions/workflows?per_page=100" --jq '.workflows[].id')
+
+          if [ -z "$WORKFLOW_IDS" ]; then
+            echo "ℹ️ No workflows found"
+            exit 0
+          fi
+
+          TOTAL_DELETED=0
+          TOTAL_KEPT=0
+          TOTAL_SKIPPED=0
+
+          for WF_ID in $WORKFLOW_IDS; do
+            WF_NAME=$(gh api "repos/$REPO/actions/workflows/$WF_ID" --jq '.name // .path')
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "🔍 Workflow: $WF_NAME (ID: $WF_ID)"
+
+            # Fetch all runs for this workflow (paginated, newest first)
+            RUNS_JSON=$(gh api --paginate "repos/$REPO/actions/workflows/$WF_ID/runs?per_page=100" --jq '[.workflow_runs[]]')
+
+            RUN_COUNT=$(echo "$RUNS_JSON" | jq 'length')
+            if [ "$RUN_COUNT" -eq 0 ]; then
+              echo "   ℹ️ No runs"
+              continue
+            fi
+
+            echo "   📊 Total runs: $RUN_COUNT"
+
+            # Iterate with index — keep first KEEP_MINIMUM regardless of age
+            INDEX=0
+            echo "$RUNS_JSON" | jq -c '.[]' | while read -r RUN; do
+              INDEX=$((INDEX + 1))
+              RUN_ID=$(echo "$RUN" | jq -r '.id')
+              RUN_CREATED=$(echo "$RUN" | jq -r '.created_at')
+              RUN_STATUS=$(echo "$RUN" | jq -r '.status')
+              RUN_CONCLUSION=$(echo "$RUN" | jq -r '.conclusion // "n/a"')
+              RUN_NAME=$(echo "$RUN" | jq -r '.name // .display_title // "run"')
+
+              # Always keep the most recent KEEP_MINIMUM runs
+              if [ "$INDEX" -le "$KEEP_MINIMUM" ]; then
+                echo "   ⏭️  Keep (top $KEEP_MINIMUM) #$RUN_ID — $RUN_CREATED [$RUN_STATUS/$RUN_CONCLUSION] $RUN_NAME"
+                continue
+              fi
+
+              # Skip in-progress / queued runs
+              if [ "$RUN_STATUS" != "completed" ]; then
+                echo "   ⏭️  Skip (not completed) #$RUN_ID — $RUN_CREATED [$RUN_STATUS]"
+                continue
+              fi
+
+              RUN_EPOCH=$(date -d "$RUN_CREATED" +%s)
+
+              if [ "$RUN_EPOCH" -lt "$CUTOFF_EPOCH" ]; then
+                if [ "$DRY_RUN" = "true" ]; then
+                  echo "   🧪 [dry-run] Would delete #$RUN_ID — $RUN_CREATED [$RUN_CONCLUSION] $RUN_NAME"
+                else
+                  echo "   🗑️  Deleting #$RUN_ID — $RUN_CREATED [$RUN_CONCLUSION] $RUN_NAME"
+                  if gh api -X DELETE "repos/$REPO/actions/runs/$RUN_ID" --silent 2>&1; then
+                    echo "      ✅ Deleted"
+                  else
+                    echo "      ⚠️ Failed to delete #$RUN_ID (may already be deleted)"
+                  fi
+                  # Be nice to the API
+                  sleep 0.3
+                fi
+              else
+                echo "   ⏭️  Keep (within retention) #$RUN_ID — $RUN_CREATED [$RUN_CONCLUSION]"
+              fi
+            done
+          done
+
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "🧪 Dry run complete — no runs were deleted"
+          else
+            echo "✅ Cleanup complete"
+          fi
+          echo "   Cutoff: $CUTOFF_DATE ($RETENTION_DAYS days ago)"
+          echo "   Kept at least $KEEP_MINIMUM most recent runs per workflow"
