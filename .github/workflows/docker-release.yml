@@ -148,9 +148,15 @@ jobs:
           EXISTS=false
           for REG in $(echo "$REGISTRIES" | jq -r '.[]'); do
             CHECK_TAG=$(echo "$REG" | sed "s/:latest/:$DOCKER_TAG/")
-            REPO_PART=$(echo "$CHECK_TAG" | cut -d: -f1)
+            REPO_PART=""
 
             if [[ "$CHECK_TAG" == ghcr.io/* ]]; then
+              REPO_PART="ghcr.io/$GITHUB_REPOSITORY_OWNER/${CHECK_TAG#ghcr.io/}"
+            elif [ "$DOCKERHUB_ENABLED" = "true" ]; then
+              REPO_PART="$DOCKERHUB_USERNAME/$CHECK_TAG"
+            fi
+
+            if [[ "$REPO_PART" == ghcr.io/* ]]; then
               PKG_PATH=$(echo "$REPO_PART" | sed 's|ghcr.io/||')
               PKG_OWNER=$(echo "$PKG_PATH" | cut -d/ -f1)
               PKG_NAME=$(echo "$PKG_PATH" | cut -d/ -f2)
@@ -160,7 +166,7 @@ jobs:
                 EXISTS=true
               fi
             else
-              HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}"                 "https://hub.docker.com/v2/repositories/$REPO_PART/tags/$DOCKER_TAG")
+              HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://hub.docker.com/v2/repositories/$REPO_PART/tags/$DOCKER_TAG")
               if [ "$HTTP_STATUS" = "200" ]; then EXISTS=true; fi
             fi
           done
