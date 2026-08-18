@@ -228,16 +228,41 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 🐳 Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          platforms: ${{ join(fromJson(needs.configure.outputs.config).build.platforms, ',') }}
-          push: true
-          tags: ${{ needs.configure.outputs.image_tags }}
-          cache-from: ${{ needs.configure.outputs.cache_enabled == 'true' && 'type=gha' || '' }}
-          cache-to: ${{ needs.configure.outputs.cache_enabled == 'true' && 'type=gha,mode=max' || '' }}
-          build-args: |
-            VERSION=${{ needs.configure.outputs.upstream_version }}
+        run: |
+          # image_tags from configure only has image_name:tag (no username)
+          # Prefix with the correct username from env vars
+          RAW_TAGS='${{ needs.configure.outputs.image_tags }}'
+          CONFIG='${{ needs.configure.outputs.config }}'
+          DOCKERHUB_ENABLED=$(echo "$CONFIG" | jq -r '.registry.dockerhub.enabled')
+          GHCR_ENABLED=$(echo "$CONFIG" | jq -r '.registry.ghcr.enabled')
+          PLATFORMS='${{ join(fromJson(needs.configure.outputs.config).build.platforms, ',') }}'
+          VERSION='${{ needs.configure.outputs.upstream_version }}'
+          CACHE_FLAG=""
+          if [ "${{ fromJson(needs.configure.outputs.config).build.cache_enabled }}" = "true" ]; then
+            CACHE_FLAG="--cache-from type=gha --cache-to type=gha,mode=max"
+          fi
+
+          TAG_ARGS=""
+          IFS=',' read -ra TAG_ARRAY <<< "$RAW_TAGS"
+          for TAG in "${TAG_ARRAY[@]}"; do
+            if [[ "$TAG" == ghcr.io/* ]]; then
+              FULL_TAG="ghcr.io/$GITHUB_REPOSITORY_OWNER/${TAG#ghcr.io/}"
+            elif [ "$DOCKERHUB_ENABLED" = "true" ]; then
+              FULL_TAG="$DOCKERHUB_USERNAME/$TAG"
+            fi
+            echo "🏷️ Adding tag: $FULL_TAG"
+            TAG_ARGS="$TAG_ARGS --tag $FULL_TAG"
+          done
+
+          docker buildx build \
+            --platform "$PLATFORMS" \
+            --build-arg "VERSION=$VERSION" \
+            $CACHE_FLAG \
+            $TAG_ARGS \
+            --push .
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
 
       - name: ✅ Build success
         if: success()
