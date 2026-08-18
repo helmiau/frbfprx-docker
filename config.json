@@ -24,7 +24,7 @@
       "image_name": "freebuff-proxy-docker"
     },
     "ghcr": {
-      "enabled": false,
+      "enabled": true,
       "username": "${GITHUB_REPOSITORY_OWNER}",
       "image_name": "freebuff-proxy-docker"
     }
