@@ -159,14 +159,14 @@ You should receive the message in Telegram.
 
 ### Missing/Invalid Secrets Handling
 
-Notifikasi bersifat **non-blocking dan auto-skip**. Jika salah satu dari `DISCORD_WEBHOOK_URL`, `SLACK_WEBHOOK_URL`, `TELEGRAM_BOT_TOKEN`, atau `TELEGRAM_CHAT_ID` kosong, tidak di-set, atau response API invalid (non-2xx), maka:
+Notifications are **non-blocking and auto-skip**. If any of `DISCORD_WEBHOOK_URL`, `SLACK_WEBHOOK_URL`, `TELEGRAM_BOT_TOKEN`, or `TELEGRAM_CHAT_ID` is empty, not set, or returns an invalid API response (non-2xx), then:
 
-1. Provider tersebut **di-skip otomatis** tanpa gagalkan workflow
-2. Informasi lengkap tetap **di-log di GitHub Actions** (misal: `⚠️ TELEGRAM_BOT_TOKEN is empty or not set, skipping`)
-3. Provider lain yang valid tetap jalan
-4. Build, push, dan mirror **tetap berjalan sampai selesai**
+1. That provider is **automatically skipped** without failing the workflow
+2. Full details are **logged in GitHub Actions** (e.g., `⚠️ TELEGRAM_BOT_TOKEN is empty or not set, skipping`)
+3. Other valid providers continue to work
+4. Build, push, and mirror stages **still run to completion**
 
-Contoh output log saat secret tidak lengkap:
+Example log output when secrets are incomplete:
 
 ```
 📤 Sending discord notification...
