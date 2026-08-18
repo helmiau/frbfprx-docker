@@ -238,9 +238,6 @@ jobs:
           cache-to: ${{ needs.configure.outputs.cache_enabled == 'true' && 'type=gha,mode=max' || '' }}
           build-args: |
             VERSION=${{ needs.configure.outputs.upstream_version }}
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
 
       - name: ✅ Build success
         if: success()
