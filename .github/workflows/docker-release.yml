@@ -118,30 +118,23 @@ jobs:
           echo "upstream_tarball=$(echo "$LATEST" | jq -r '.tarball_url')" >> $GITHUB_OUTPUT
           echo "upstream_zipball=$(echo "$LATEST" | jq -r '.zipball_url')" >> $GITHUB_OUTPUT
 
-          # Build registry targets
+          # Build registry targets — only pass non-secret parts via GITHUB_OUTPUT
           REGISTRIES="[]"
           IMAGE_TAGS=""
 
-          echo "🔍 DEBUG: DOCKERHUB_ENABLED=$DOCKERHUB_ENABLED"
-          echo "🔍 DEBUG: DOCKERHUB_USERNAME=$DOCKERHUB_USERNAME"
-          echo "🔍 DEBUG: GITHUB_REPOSITORY_OWNER=$GITHUB_REPOSITORY_OWNER"
-
           if [ "$DOCKERHUB_ENABLED" = "true" ]; then
             DH_NAME=$(echo "$CONFIG" | jq -r '.registry.dockerhub.image_name')
-            echo "🔍 DEBUG: DH_NAME=$DH_NAME"
-            REGISTRIES=$(echo "$REGISTRIES" | jq --arg r "$DOCKERHUB_USERNAME/$DH_NAME" '. + [$r]')
-            IMAGE_TAGS="$IMAGE_TAGS,$DOCKERHUB_USERNAME/$DH_NAME:$DOCKER_TAG,$DOCKERHUB_USERNAME/$DH_NAME:latest"
+            REGISTRIES=$(echo "$REGISTRIES" | jq --arg r "$DH_NAME" '. + [$r]')
+            IMAGE_TAGS="$IMAGE_TAGS,$DH_NAME:$DOCKER_TAG,$DH_NAME:latest"
           fi
 
           if [ "$GHCR_ENABLED" = "true" ]; then
             GH_NAME=$(echo "$CONFIG" | jq -r '.registry.ghcr.image_name')
-            echo "🔍 DEBUG: GH_NAME=$GH_NAME"
-            REGISTRIES=$(echo "$REGISTRIES" | jq --arg r "ghcr.io/$GITHUB_REPOSITORY_OWNER/$GH_NAME" '. + [$r]')
-            IMAGE_TAGS="$IMAGE_TAGS,ghcr.io/$GITHUB_REPOSITORY_OWNER/$GH_NAME:$DOCKER_TAG,ghcr.io/$GITHUB_REPOSITORY_OWNER/$GH_NAME:latest"
+            REGISTRIES=$(echo "$REGISTRIES" | jq --arg r "ghcr.io/$GH_NAME" '. + [$r]')
+            IMAGE_TAGS="$IMAGE_TAGS,ghcr.io/$GH_NAME:$DOCKER_TAG,ghcr.io/$GH_NAME:latest"
           fi
 
           IMAGE_TAGS="${IMAGE_TAGS#,}"
-          echo "🔍 DEBUG: IMAGE_TAGS=$IMAGE_TAGS"
           echo "image_tags=$IMAGE_TAGS" >> $GITHUB_OUTPUT
           echo "registries=$(echo "$REGISTRIES" | jq -c .)" >> $GITHUB_OUTPUT
 
