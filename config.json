@@ -21,12 +21,14 @@
     "dockerhub": {
       "enabled": true,
       "username": "${DOCKERHUB_USERNAME}",
-      "image_name": "freebuff-proxy-docker"
+      "image_name": "freebuff-proxy-docker",
+      "repo_url": "https://hub.docker.com/r/${DOCKERHUB_USERNAME}/freebuff-proxy-docker"
     },
     "ghcr": {
       "enabled": true,
       "username": "${GITHUB_REPOSITORY_OWNER}",
-      "image_name": "freebuff-proxy-docker"
+      "image_name": "freebuff-proxy-docker",
+      "repo_url": "https://github.com/${GITHUB_REPOSITORY}/pkgs/container/freebuff-proxy-docker"
     }
   },
   "notifications": {

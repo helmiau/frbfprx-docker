@@ -21,7 +21,17 @@ TAG=$(echo "$PAYLOAD" | jq -r '.tag')
 IMAGES=$(echo "$PAYLOAD" | jq -r '.images')
 RUN_URL=$(echo "$PAYLOAD" | jq -r '.run_url')
 NOTIFY_MODE=$(echo "$PAYLOAD" | jq -r '.notify_mode')
-BUILDER_VER="${BUILDER_VERSION:-1.1.0}"
+REPO=$(echo "$PAYLOAD" | jq -r '.repo // ""')
+BUILDER_VER=$(echo "$PAYLOAD" | jq -r '.builder_version // ""')
+[ -z "$BUILDER_VER" ] || [ "$BUILDER_VER" = "null" ] && BUILDER_VER="${BUILDER_VERSION:-1.1.0}"
+UPSTREAM_REPO=$(echo "$PAYLOAD" | jq -r '.upstream_repo // "trefeon/freebuff-proxy"')
+DOCKERHUB_IMAGE=$(echo "$PAYLOAD" | jq -r '.dockerhub_image // ""')
+GHCR_IMAGE=$(echo "$PAYLOAD" | jq -r '.ghcr_image // ""')
+DOCKERHUB_URL=$(echo "$PAYLOAD" | jq -r '.dockerhub_url // ""')
+GHCR_URL=$(echo "$PAYLOAD" | jq -r '.ghcr_url // ""')
+# Arrays for structured rendering
+IMAGES_VERSION_JSON=$(echo "$PAYLOAD" | jq -c '.images_version // []')
+IMAGES_LATEST_JSON=$(echo "$PAYLOAD" | jq -c '.images_latest // []')
 
 case "$PROVIDER" in
     discord)
@@ -37,12 +47,36 @@ case "$PROVIDER" in
             COLOR=15158332
         fi
 
+        # Build repo links line from config-driven URLs
+        REPO_LINKS=""
+        if [ -n "$DOCKERHUB_URL" ] && [ "$DOCKERHUB_URL" != "null" ] && [ "$DOCKERHUB_URL" != "" ]; then
+            REPO_LINKS="[Docker Hub]($DOCKERHUB_URL)"
+        fi
+        if [ -n "$GHCR_URL" ] && [ "$GHCR_URL" != "null" ] && [ "$GHCR_URL" != "" ]; then
+            if [ -n "$REPO_LINKS" ]; then REPO_LINKS="$REPO_LINKS | "; fi
+            REPO_LINKS="${REPO_LINKS}[GHCR]($GHCR_URL)"
+        fi
+        [ -z "$REPO_LINKS" ] && REPO_LINKS="—"
+
+        # Build images field: versioned + latest
+        IMAGES_FIELD="$IMAGES"
+        if [ "$(echo "$IMAGES_LATEST_JSON" | jq 'length')" -gt 0 ]; then
+            LATEST_LINES=$(echo "$IMAGES_LATEST_JSON" | jq -r '.[] | "• `\(.)`"')
+            IMAGES_FIELD="$IMAGES
+
+Or use \`latest\`:
+$LATEST_LINES"
+        fi
+
         PAYLOAD_JSON=$(jq -n \
             --arg status "$STATUS" \
             --arg tag "$TAG" \
-            --arg images "$IMAGES" \
+            --arg images "$IMAGES_FIELD" \
             --arg run_url "$RUN_URL" \
             --arg notify_mode "$NOTIFY_MODE" \
+            --arg repo_links "$REPO_LINKS" \
+            --arg repo "$REPO" \
+            --arg builder_version "$BUILDER_VER" \
             --argjson color "$COLOR" \
             --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             '{
@@ -53,8 +87,11 @@ case "$PROVIDER" in
                   {name: "Version", value: $tag, inline: true},
                   {name: "Notify Mode", value: $notify_mode, inline: true},
                   {name: "Images", value: $images, inline: false},
-                  {name: "Run", value: "[View Logs](\($run_url))", inline: true}
+                  {name: "Repos", value: $repo_links, inline: false},
+                  {name: "Run", value: "[View Logs](\($run_url))", inline: true},
+                  {name: "Builder", value: $builder_version, inline: true}
                 ],
+                footer: {text: $repo},
                 timestamp: $timestamp
               }]
             }')
@@ -80,15 +117,37 @@ case "$PROVIDER" in
             COLOR="#ff0000"
         fi
 
+        # Build repo links for Slack
+        REPO_LINKS_SLACK=""
+        if [ -n "$DOCKERHUB_URL" ] && [ "$DOCKERHUB_URL" != "null" ] && [ "$DOCKERHUB_URL" != "" ]; then
+            REPO_LINKS_SLACK="<$DOCKERHUB_URL|Docker Hub>"
+        fi
+        if [ -n "$GHCR_URL" ] && [ "$GHCR_URL" != "null" ] && [ "$GHCR_URL" != "" ]; then
+            if [ -n "$REPO_LINKS_SLACK" ]; then REPO_LINKS_SLACK="$REPO_LINKS_SLACK | "; fi
+            REPO_LINKS_SLACK="${REPO_LINKS_SLACK}<$GHCR_URL|GHCR>"
+        fi
+        [ -z "$REPO_LINKS_SLACK" ] && REPO_LINKS_SLACK="—"
+
+        IMAGES_FIELD_SLACK="$IMAGES"
+        if [ "$(echo "$IMAGES_LATEST_JSON" | jq 'length')" -gt 0 ]; then
+            LATEST_LINES_SLACK=$(echo "$IMAGES_LATEST_JSON" | jq -r '.[] | "• `\(.)`"')
+            IMAGES_FIELD_SLACK="$IMAGES
+
+Or use \`latest\`:
+$LATEST_LINES_SLACK"
+        fi
+
         PAYLOAD_JSON=$(jq -n \
             --arg color "$COLOR" \
             --arg emoji "$EMOJI" \
             --arg status "$STATUS" \
             --arg tag "$TAG" \
             --arg notify_mode "$NOTIFY_MODE" \
-            --arg images "$IMAGES" \
+            --arg images "$IMAGES_FIELD_SLACK" \
             --arg run_url "$RUN_URL" \
-            --arg footer "Docker Builder v${BUILDER_VER}" \
+            --arg repo_links "$REPO_LINKS_SLACK" \
+            --arg repo "$REPO" \
+            --arg footer "Docker Builder v${BUILDER_VER} • $REPO" \
             --argjson ts "$(date +%s)" \
             '{
               attachments: [{
@@ -98,6 +157,7 @@ case "$PROVIDER" in
                   {title: "Version", value: $tag, short: true},
                   {title: "Notify Mode", value: $notify_mode, short: true},
                   {title: "Images", value: $images, short: false},
+                  {title: "Repos", value: $repo_links, short: false},
                   {title: "Run URL", value: $run_url, short: false}
                 ],
                 footer: $footer,
@@ -141,19 +201,76 @@ case "$PROVIDER" in
             EMOJI="❌"
         fi
 
-        # Build image list with bullet points
-        IMAGES_BULLETS=$(echo "$IMAGES" | sed 's/^/• /')
+        # Build Telegram message — structured, config-driven, no hardcoded URLs
+        # Versioned images
+        TG_IMAGES_VERSION=""
+        if [ "$(echo "$IMAGES_VERSION_JSON" | jq 'length')" -gt 0 ]; then
+            while IFS= read -r img; do
+                TG_IMAGES_VERSION="${TG_IMAGES_VERSION}• 📦 <code>${img}</code>
+"
+            done < <(echo "$IMAGES_VERSION_JSON" | jq -r '.[]')
+        else
+            TG_IMAGES_VERSION="• <i>No images configured</i>
+"
+        fi
 
-        MESSAGE="${EMOJI} <b>freebuff-proxy Build ${STATUS}</b>
+        # Latest images
+        TG_IMAGES_LATEST=""
+        if [ "$(echo "$IMAGES_LATEST_JSON" | jq 'length')" -gt 0 ]; then
+            while IFS= read -r img; do
+                TG_IMAGES_LATEST="${TG_IMAGES_LATEST}• 📦 <code>${img}</code>
+"
+            done < <(echo "$IMAGES_LATEST_JSON" | jq -r '.[]')
+        fi
+
+        # Repo links line — fully config-driven
+        TG_REPOS_LINE=""
+        if [ -n "$DOCKERHUB_URL" ] && [ "$DOCKERHUB_URL" != "null" ] && [ "$DOCKERHUB_URL" != "" ]; then
+            TG_REPOS_LINE="<a href=\"${DOCKERHUB_URL}\">Docker Hub</a>"
+        fi
+        if [ -n "$GHCR_URL" ] && [ "$GHCR_URL" != "null" ] && [ "$GHCR_URL" != "" ]; then
+            if [ -n "$TG_REPOS_LINE" ]; then TG_REPOS_LINE="$TG_REPOS_LINE | "; fi
+            TG_REPOS_LINE="${TG_REPOS_LINE}<a href=\"${GHCR_URL}\">GHCR</a>"
+        fi
+        if [ -n "$REPO" ] && [ "$REPO" != "null" ] && [ "$REPO" != "" ]; then
+            if [ -n "$TG_REPOS_LINE" ]; then TG_REPOS_LINE="$TG_REPOS_LINE | "; fi
+            TG_REPOS_LINE="${TG_REPOS_LINE}<a href=\"https://github.com/${REPO}\">GitHub</a>"
+        fi
+
+        # Upstream link
+        TG_UPSTREAM_LINE="<a href=\"https://github.com/${UPSTREAM_REPO}/releases/tag/${TAG}\">${UPSTREAM_REPO}@${TAG}</a>"
+
+        if [ "$STATUS" = "SUCCESS" ]; then
+            TG_TITLE="${EMOJI} <b>freebuff-proxy Build SUCCESS</b>"
+            TG_LATEST_SECTION=""
+            if [ -n "$TG_IMAGES_LATEST" ]; then
+                TG_LATEST_SECTION="
+Or use <code>latest</code> build:
+${TG_IMAGES_LATEST}"
+            fi
+            MESSAGE="${TG_TITLE}
 
 <b>Version:</b> <code>${TAG}</code>
-<b>Notify Mode:</b> <code>${NOTIFY_MODE}</code>
+<b>Upstream:</b> ${TG_UPSTREAM_LINE}
 <b>Images:</b>
-${IMAGES_BULLETS}
-
+${TG_IMAGES_VERSION}${TG_LATEST_SECTION}
 <b>Run:</b> <a href=\"${RUN_URL}\">View Logs</a>
-
+<b>Repos:</b> ${TG_REPOS_LINE}
+-------
 <i>Builder v${BUILDER_VER}</i>"
+        else
+            MESSAGE="${EMOJI} <b>freebuff-proxy Build FAILED</b>
+
+<b>Version:</b> <code>${TAG}</code>
+<b>Upstream:</b> ${TG_UPSTREAM_LINE}
+<b>Notify Mode:</b> <code>${NOTIFY_MODE}</code>
+<b>Attempted Images:</b>
+${TG_IMAGES_VERSION}
+<b>Run:</b> <a href=\"${RUN_URL}\">View Logs</a>
+<b>Repos:</b> ${TG_REPOS_LINE}
+-------
+<i>Builder v${BUILDER_VER}</i>"
+        fi
 
         # Send to each target (comma-separated), non-blocking per target
         IFS=',' read -ra TG_TARGETS <<< "$TELEGRAM_TARGETS"

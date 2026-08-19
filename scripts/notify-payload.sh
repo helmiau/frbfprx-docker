@@ -27,23 +27,91 @@ else
     STATUS="FAILED"
 fi
 
-# Build image list
-IMAGES=""
-if [ "$(echo "$CONFIG" | jq -r '.registry.dockerhub.enabled')" = "true" ]; then
-    DH_USER="${DOCKERHUB_USERNAME:-$(echo "$CONFIG" | jq -r '.registry.dockerhub.username')}"
-    DH_NAME=$(echo "$CONFIG" | jq -r '.registry.dockerhub.image_name')
-    IMAGES="$IMAGES
-📦 Docker Hub: \`$DH_USER/$DH_NAME:$TAG\`"
-fi
-if [ "$(echo "$CONFIG" | jq -r '.registry.ghcr.enabled')" = "true" ]; then
-    GH_USER="${GITHUB_REPOSITORY_OWNER:-$(echo "$CONFIG" | jq -r '.registry.ghcr.username')}"
-    GH_NAME=$(echo "$CONFIG" | jq -r '.registry.ghcr.image_name')
-    IMAGES="$IMAGES
-📦 GHCR: \`ghcr.io/$GH_USER/$GH_NAME:$TAG\`"
+# Helper: expand ${VAR} templates using env vars (envsubst if available)
+expand_vars() {
+    local raw="$1"
+    if command -v envsubst >/dev/null 2>&1; then
+        printf '%s' "$raw" | envsubst
+    else
+        # fallback: eval with env vars (safe for simple ${VAR} patterns)
+        eval "printf '%s' \"$raw\""
+    fi
+}
+
+# Resolve Docker Hub image + URL
+DH_IMAGE=""
+DH_URL=""
+DH_ENABLED=$(echo "$CONFIG" | jq -r '.registry.dockerhub.enabled')
+if [ "$DH_ENABLED" = "true" ]; then
+    DH_USER_RAW=$(echo "$CONFIG" | jq -r '.registry.dockerhub.username // ""')
+    DH_USER_EXPANDED=$(expand_vars "$DH_USER_RAW")
+    DH_USER="${DOCKERHUB_USERNAME:-$DH_USER_EXPANDED}"
+    # fallback if still contains ${...} or empty
+    if [ -z "$DH_USER" ] || [[ "$DH_USER" == *"\${"* ]]; then
+        DH_USER="${DOCKERHUB_USERNAME:-}"
+    fi
+    DH_NAME=$(echo "$CONFIG" | jq -r '.registry.dockerhub.image_name // "freebuff-proxy-docker"')
+    DH_IMAGE="$DH_USER/$DH_NAME"
+    DH_URL_RAW=$(echo "$CONFIG" | jq -r '.registry.dockerhub.repo_url // ""')
+    if [ -n "$DH_URL_RAW" ] && [ "$DH_URL_RAW" != "null" ] && [ "$DH_URL_RAW" != "" ]; then
+        DH_URL=$(expand_vars "$DH_URL_RAW")
+    else
+        DH_URL="https://hub.docker.com/r/$DH_IMAGE"
+    fi
+    # ensure DH_URL still has no unexpanded vars
+    DH_URL=$(expand_vars "$DH_URL")
 fi
 
-# Build images array for JSON (handles multi-line safely)
+# Resolve GHCR image + URL
+GH_IMAGE=""
+GH_URL=""
+GH_ENABLED=$(echo "$CONFIG" | jq -r '.registry.ghcr.enabled')
+if [ "$GH_ENABLED" = "true" ]; then
+    GH_USER_RAW=$(echo "$CONFIG" | jq -r '.registry.ghcr.username // ""')
+    GH_USER_EXPANDED=$(expand_vars "$GH_USER_RAW")
+    GH_USER="${GITHUB_REPOSITORY_OWNER:-$GH_USER_EXPANDED}"
+    if [ -z "$GH_USER" ] || [[ "$GH_USER" == *"\${"* ]]; then
+        GH_USER="${GITHUB_REPOSITORY_OWNER:-}"
+    fi
+    GH_NAME=$(echo "$CONFIG" | jq -r '.registry.ghcr.image_name // "freebuff-proxy-docker"')
+    GH_IMAGE="ghcr.io/$GH_USER/$GH_NAME"
+    GH_URL_RAW=$(echo "$CONFIG" | jq -r '.registry.ghcr.repo_url // ""')
+    if [ -n "$GH_URL_RAW" ] && [ "$GH_URL_RAW" != "null" ] && [ "$GH_URL_RAW" != "" ]; then
+        GH_URL=$(expand_vars "$GH_URL_RAW")
+    else
+        # fallback: use REPO if available, else GH_USER/GH_NAME
+        if [ -n "$REPO" ] && [ "$REPO" != "" ]; then
+            GH_URL="https://github.com/$REPO/pkgs/container/$GH_NAME"
+        else
+            GH_URL="https://github.com/$GH_USER/pkgs/container/$GH_NAME"
+        fi
+    fi
+    GH_URL=$(expand_vars "$GH_URL")
+fi
+
+# Build legacy image list (for Discord/Slack backward compat)
+IMAGES=""
+IMAGES_VERSION_JSON="[]"
+IMAGES_LATEST_JSON="[]"
+if [ "$DH_ENABLED" = "true" ] && [ -n "$DH_IMAGE" ]; then
+    IMAGES="$IMAGES
+📦 Docker Hub: \`$DH_IMAGE:$TAG\`"
+    IMAGES_VERSION_JSON=$(echo "$IMAGES_VERSION_JSON" | jq --arg v "$DH_IMAGE:$TAG" '. + [$v]')
+    IMAGES_LATEST_JSON=$(echo "$IMAGES_LATEST_JSON" | jq --arg v "$DH_IMAGE:latest" '. + [$v]')
+fi
+if [ "$GH_ENABLED" = "true" ] && [ -n "$GH_IMAGE" ]; then
+    IMAGES="$IMAGES
+📦 GHCR: \`$GH_IMAGE:$TAG\`"
+    IMAGES_VERSION_JSON=$(echo "$IMAGES_VERSION_JSON" | jq --arg v "$GH_IMAGE:$TAG" '. + [$v]')
+    IMAGES_LATEST_JSON=$(echo "$IMAGES_LATEST_JSON" | jq --arg v "$GH_IMAGE:latest" '. + [$v]')
+fi
+
+# Build images string for JSON (handles multi-line safely)
 IMAGES_JSON=$(printf '%s' "$IMAGES" | jq -Rs '.')
+
+# Builder version from config
+BUILDER_VER=$(echo "$CONFIG" | jq -r '.version // "1.1.0"')
+UPSTREAM_REPO=$(echo "$CONFIG" | jq -r '.project.upstream.repo // "trefeon/freebuff-proxy"')
 
 jq -n \
     --arg status "$STATUS" \
@@ -54,13 +122,29 @@ jq -n \
     --arg notify_mode "$NOTIFY_MODE" \
     --arg repo "$REPO" \
     --arg run_url "$RUN_URL" \
+    --arg builder_version "$BUILDER_VER" \
+    --arg upstream_repo "$UPSTREAM_REPO" \
+    --arg dockerhub_image "$DH_IMAGE" \
+    --arg ghcr_image "$GH_IMAGE" \
+    --arg dockerhub_url "$DH_URL" \
+    --arg ghcr_url "$GH_URL" \
+    --argjson images_version "$IMAGES_VERSION_JSON" \
+    --argjson images_latest "$IMAGES_LATEST_JSON" \
     '{
       status: $status,
       tag: $tag,
       images: $images,
+      images_version: $images_version,
+      images_latest: $images_latest,
+      dockerhub_image: $dockerhub_image,
+      ghcr_image: $ghcr_image,
+      dockerhub_url: $dockerhub_url,
+      ghcr_url: $ghcr_url,
       build_status: $build_status,
       mirror_status: $mirror_status,
       notify_mode: $notify_mode,
       repo: $repo,
-      run_url: $run_url
+      run_url: $run_url,
+      builder_version: $builder_version,
+      upstream_repo: $upstream_repo
     }' | jq -c .
