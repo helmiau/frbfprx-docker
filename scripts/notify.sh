@@ -116,11 +116,24 @@ case "$PROVIDER" in
             echo "⚠️ TELEGRAM_BOT_TOKEN is empty or not set, skipping Telegram notification"
             exit 0
         fi
-        if [ -z "${TELEGRAM_CHAT_ID:-}" ] || [ "$TELEGRAM_CHAT_ID" = "" ]; then
-            echo "⚠️ TELEGRAM_CHAT_ID is empty or not set, skipping Telegram notification"
+        # Collect all Telegram destinations: TELEGRAM_CHAT_ID + TELEGRAM_CHANNEL_CHAT_ID
+        # Supports comma-separated lists and @channelusername format
+        TELEGRAM_TARGETS=""
+        if [ -n "${TELEGRAM_CHAT_ID:-}" ] && [ "$TELEGRAM_CHAT_ID" != "" ]; then
+            TELEGRAM_TARGETS="$TELEGRAM_CHAT_ID"
+        fi
+        if [ -n "${TELEGRAM_CHANNEL_CHAT_ID:-}" ] && [ "$TELEGRAM_CHANNEL_CHAT_ID" != "" ]; then
+            if [ -n "$TELEGRAM_TARGETS" ]; then
+                TELEGRAM_TARGETS="$TELEGRAM_TARGETS,$TELEGRAM_CHANNEL_CHAT_ID"
+            else
+                TELEGRAM_TARGETS="$TELEGRAM_CHANNEL_CHAT_ID"
+            fi
+        fi
+        if [ -z "$TELEGRAM_TARGETS" ]; then
+            echo "⚠️ TELEGRAM_CHAT_ID and TELEGRAM_CHANNEL_CHAT_ID are both empty, skipping Telegram notification"
             exit 0
         fi
-        echo "  ℹ️  Bot token and chat ID configured, sending..."
+        echo "  ℹ️  Bot token configured, targets: $TELEGRAM_TARGETS"
 
         if [ "$STATUS" = "SUCCESS" ]; then
             EMOJI="✅"
@@ -142,12 +155,27 @@ ${IMAGES_BULLETS}
 
 <i>Builder v${BUILDER_VER}</i>"
 
-        HTTP_CODE=$(curl -sL -o /dev/null -w "%{http_code}" -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            -d "chat_id=${TELEGRAM_CHAT_ID}" \
-            -d "parse_mode=HTML" \
-            --data-urlencode "text=${MESSAGE}" \
-            -d "disable_web_page_preview=true")
-        echo "  ℹ️  Telegram responded with HTTP $HTTP_CODE"
+        # Send to each target (comma-separated), non-blocking per target
+        IFS=',' read -ra TG_TARGETS <<< "$TELEGRAM_TARGETS"
+        TG_FAILED=0
+        for TG_CHAT in "${TG_TARGETS[@]}"; do
+            TG_CHAT=$(echo "$TG_CHAT" | xargs)  # trim whitespace
+            [ -z "$TG_CHAT" ] && continue
+            echo "  📤 Sending to $TG_CHAT ..."
+            HTTP_CODE=$(curl -sL -o /dev/null -w "%{http_code}" -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+                -d "chat_id=${TG_CHAT}" \
+                -d "parse_mode=HTML" \
+                --data-urlencode "text=${MESSAGE}" \
+                -d "disable_web_page_preview=true" || echo "000")
+            echo "  ℹ️  Telegram ($TG_CHAT) responded with HTTP $HTTP_CODE"
+            if [ "$HTTP_CODE" != "200" ]; then
+                echo "  ⚠️ Failed to send to $TG_CHAT (HTTP $HTTP_CODE) — check bot is admin in channel / chat_id is correct"
+                TG_FAILED=$((TG_FAILED + 1))
+            fi
+        done
+        if [ "$TG_FAILED" -gt 0 ] && [ "$TG_FAILED" -eq "${#TG_TARGETS[@]}" ]; then
+            echo "  ⚠️ All Telegram targets failed"
+        fi
         ;;
 
     *)

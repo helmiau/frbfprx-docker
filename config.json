@@ -44,7 +44,9 @@
     "telegram": {
       "enabled": true,
       "bot_token": "${TELEGRAM_BOT_TOKEN}",
-      "chat_id": "${TELEGRAM_CHAT_ID}"
+      "chat_id": "${TELEGRAM_CHAT_ID}",
+      "channel_chat_id": "${TELEGRAM_CHANNEL_CHAT_ID}",
+      "_channel_help": "Optional: public channel target. Use @channelusername or -100xxxxxxxxxx. Bot must be admin in the channel. Leave empty to disable. Multiple IDs comma-separated also supported in TELEGRAM_CHAT_ID."
     }
   },
   "mirror": {

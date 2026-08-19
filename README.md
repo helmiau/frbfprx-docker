@@ -58,7 +58,8 @@ Go to **Settings → Secrets and variables → Actions → New repository secret
 | `DOCKERHUB_USERNAME` | Docker Hub | Your Docker Hub username | **Required** |
 | `DOCKERHUB_TOKEN` | Docker Hub | [Create access token](https://hub.docker.com/settings/security) | **Required** |
 | `TELEGRAM_BOT_TOKEN` | Telegram | See [Telegram Setup Guide](#-telegram-setup-guide) below | Optional |
-| `TELEGRAM_CHAT_ID` | Telegram | See [Telegram Setup Guide](#-telegram-setup-guide) below | Optional |
+| `TELEGRAM_CHAT_ID` | Telegram (private/group) | See [Telegram Setup Guide](#-telegram-setup-guide) below | Optional |
+| `TELEGRAM_CHANNEL_CHAT_ID` | Telegram (public channel) | See [Telegram Channel Setup](#-telegram-channel-setup-public-channel) below | Optional |
 | `DISCORD_WEBHOOK_URL` | Discord | Server Settings → Integrations → Webhooks | Optional |
 | `SLACK_WEBHOOK_URL` | Slack | [Incoming Webhooks](https://api.slack.com/messaging/webhooks) | Optional |
 
@@ -155,6 +156,64 @@ You should receive the message in Telegram.
   }
 }
 ```
+
+### 📢 Telegram Channel Setup (Public Channel)
+
+To also send notifications to a **public Telegram channel** (in addition to your private chat):
+
+#### Step 1: Create a Channel
+
+1. In Telegram, tap **New Channel** → set name (e.g., `freebuff-proxy releases`) → choose **Public channel**
+2. Set a username, e.g., `@my_freebuff_channel` — this is your channel's public link: `t.me/my_freebuff_channel`
+
+#### Step 2: Add Your Bot as Admin
+
+1. Open the channel → **Channel Info → Administrators → Add Administrator**
+2. Search for your bot username (e.g., `@yourname_freebuff_bot`) and add it
+3. Grant at least **Post messages** permission (no other permissions needed)
+
+> ⚠️ **Required:** The bot must be an admin in the channel, otherwise Telegram returns `403 Forbidden` / `400 Bad Request: chat not found`.
+
+#### Step 3: Get the Channel Chat ID
+
+**Option A — Use @username (simplest):**
+
+Use the channel username directly as the chat ID: `@my_freebuff_channel`
+
+**Option B — Use numeric ID:**
+
+1. Post any message in the channel
+2. Forward that message to **[@userinfobot](https://t.me/userinfobot)** or **[@getidsbot](https://t.me/getidsbot)**
+3. The bot will reply with the channel ID, e.g., `-1001234567890` (channels always start with `-100`)
+
+#### Step 4: Add the Secret
+
+Go to **Settings → Secrets and variables → Actions → New repository secret**:
+
+| Secret | Value | Example |
+|--------|-------|---------|
+| `TELEGRAM_CHANNEL_CHAT_ID` | Channel username or numeric ID | `@my_freebuff_channel` or `-1001234567890` |
+
+#### Step 5: Enable in config.json
+
+```json
+{
+  "notifications": {
+    "telegram": {
+      "enabled": true,
+      "bot_token": "${TELEGRAM_BOT_TOKEN}",
+      "chat_id": "${TELEGRAM_CHAT_ID}",
+      "channel_chat_id": "${TELEGRAM_CHANNEL_CHAT_ID}"
+    }
+  }
+}
+```
+
+> **Notes:**
+> - You can use **both** `TELEGRAM_CHAT_ID` (private/group) and `TELEGRAM_CHANNEL_CHAT_ID` (public channel) at the same time — the bot will send to all configured destinations.
+> - Both fields support **comma-separated** lists, e.g., `TELEGRAM_CHAT_ID: "123456789,987654321"` or `TELEGRAM_CHANNEL_CHAT_ID: "@chan1,@chan2"`.
+> - If `TELEGRAM_CHANNEL_CHAT_ID` is empty/not set, it is silently skipped (non-blocking).
+> - Test manually: `https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=@my_freebuff_channel&text=Hello+channel`
 
 ### Notification Modes
 
