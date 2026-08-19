@@ -48,7 +48,11 @@
       "bot_token": "${TELEGRAM_BOT_TOKEN}",
       "chat_id": "${TELEGRAM_CHAT_ID}",
       "channel_chat_id": "${TELEGRAM_CHANNEL_CHAT_ID}",
-      "_channel_help": "Optional: public channel target. Use @channelusername or -100xxxxxxxxxx. Bot must be admin in the channel. Leave empty to disable. Multiple IDs comma-separated also supported in TELEGRAM_CHAT_ID."
+      "_channel_help": "Optional: public channel target. Use @channelusername or -100xxxxxxxxxx. Bot must be admin in the channel. Leave empty to disable. Multiple IDs comma-separated also supported in TELEGRAM_CHAT_ID.",
+      "channel_silent": true,
+      "_channel_silent_help": "If true, channel messages are sent with disable_notification=true (silent, no sound/vibration for members). Private chats are always noisy.",
+      "inline_keyboard": true,
+      "_inline_keyboard_help": "If true, Telegram messages include inline buttons (View Logs / Docker Hub / GHCR). URLs are taken from registry.repo_url in config."
     }
   },
   "mirror": {

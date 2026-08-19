@@ -203,7 +203,13 @@ jobs:
     needs: configure
     if: needs.configure.outputs.should_build == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      started_at: ${{ steps.build-timer.outputs.started_at }}
     steps:
+      - name: ⏱️ Record build start time
+        id: build-timer
+        run: echo "started_at=$(date +%s)" >> $GITHUB_OUTPUT
+
       - name: 📥 Checkout builder repo
         uses: actions/checkout@v4
 
@@ -394,6 +400,8 @@ jobs:
 
       - name: 📋 Prepare notification payload
         id: payload
+        env:
+          BUILD_STARTED_AT: ${{ needs.build.outputs.started_at }}
         run: |
           chmod +x "${GITHUB_WORKSPACE}/scripts/notify-payload.sh"
           PAYLOAD=$(bash "${GITHUB_WORKSPACE}/scripts/notify-payload.sh" \
@@ -405,6 +413,8 @@ jobs:
             '${{ github.repository }}' \
             '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}')
           echo "payload=$PAYLOAD" >> $GITHUB_OUTPUT
+          echo "📦 Payload: $PAYLOAD" | head -c 2000
+          echo ""
 
       # -------------------------------------------------------------------------
       # Send notifications via script

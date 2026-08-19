@@ -109,9 +109,30 @@ fi
 # Build images string for JSON (handles multi-line safely)
 IMAGES_JSON=$(printf '%s' "$IMAGES" | jq -Rs '.')
 
-# Builder version from config
+# Builder version + platforms from config
 BUILDER_VER=$(echo "$CONFIG" | jq -r '.version // "1.1.0"')
 UPSTREAM_REPO=$(echo "$CONFIG" | jq -r '.project.upstream.repo // "trefeon/freebuff-proxy"')
+PLATFORMS_STR=$(echo "$CONFIG" | jq -r '.build.platforms // ["linux/amd64","linux/arm64"] | join(", ")')
+TG_CHANNEL_SILENT=$(echo "$CONFIG" | jq -r '.notifications.telegram.channel_silent // true')
+TG_INLINE_KB=$(echo "$CONFIG" | jq -r '.notifications.telegram.inline_keyboard // true')
+
+# Build duration: prefer BUILD_STARTED_AT env (set in workflow), fallback to empty
+BUILD_DURATION=""
+if [ -n "${BUILD_STARTED_AT:-}" ] && [ "$BUILD_STARTED_AT" != "" ]; then
+    # BUILD_STARTED_AT is epoch seconds
+    NOW_EPOCH=$(date +%s)
+    ELAPSED=$((NOW_EPOCH - BUILD_STARTED_AT))
+    if [ "$ELAPSED" -lt 0 ]; then ELAPSED=0; fi
+    if [ "$ELAPSED" -ge 3600 ]; then
+        H=$((ELAPSED / 3600)); M=$(((ELAPSED % 3600) / 60)); S=$((ELAPSED % 60))
+        BUILD_DURATION=$(printf "%dh %dm %ds" "$H" "$M" "$S")
+    elif [ "$ELAPSED" -ge 60 ]; then
+        M=$((ELAPSED / 60)); S=$((ELAPSED % 60))
+        BUILD_DURATION=$(printf "%dm %ds" "$M" "$S")
+    else
+        BUILD_DURATION=$(printf "%ds" "$ELAPSED")
+    fi
+fi
 
 jq -n \
     --arg status "$STATUS" \
@@ -128,6 +149,10 @@ jq -n \
     --arg ghcr_image "$GH_IMAGE" \
     --arg dockerhub_url "$DH_URL" \
     --arg ghcr_url "$GH_URL" \
+    --arg platforms "$PLATFORMS_STR" \
+    --arg build_duration "$BUILD_DURATION" \
+    --argjson channel_silent "$TG_CHANNEL_SILENT" \
+    --argjson inline_keyboard "$TG_INLINE_KB" \
     --argjson images_version "$IMAGES_VERSION_JSON" \
     --argjson images_latest "$IMAGES_LATEST_JSON" \
     '{
@@ -140,6 +165,10 @@ jq -n \
       ghcr_image: $ghcr_image,
       dockerhub_url: $dockerhub_url,
       ghcr_url: $ghcr_url,
+      platforms: $platforms,
+      build_duration: $build_duration,
+      channel_silent: $channel_silent,
+      inline_keyboard: $inline_keyboard,
       build_status: $build_status,
       mirror_status: $mirror_status,
       notify_mode: $notify_mode,
