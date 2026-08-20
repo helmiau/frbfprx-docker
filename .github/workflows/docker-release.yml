@@ -235,6 +235,65 @@ jobs:
             echo "🔧 Using upstream Dockerfile"
           fi
 
+      - name: 🔧 Patch upstream source (v1.0.0 notifyMu fix)
+        run: |
+          set -euo pipefail
+          echo "🔍 Checking for upstream build bugs to patch..."
+
+          # --- Fix 1: v1.0.0 missing Pool.notifyMu (cooldown.go:137 p.notifyMu undefined) ---
+          # Upstream v1.0.0 ships cooldown.go that locks p.notifyMu, but pool.go never
+          # declares the field. Main branch fixes it by adding `notifyMu sync.Mutex`.
+          # Patch pool.go in-place if the field is missing.
+          if [ -f "internal/pool/pool.go" ]; then
+            if ! grep -q "notifyMu" internal/pool/pool.go; then
+              echo "🩹 Patching internal/pool/pool.go — adding notifyMu field..."
+              python3 << 'PY'
+              import pathlib, re
+              p = pathlib.Path("internal/pool/pool.go")
+              t = p.read_text(encoding="utf-8")
+              # 1) Add notifyMu field after `notify *notify.Sender`
+              #    Handle both `notify *notify.Sender` and `notify   *notify.Sender`
+              if "notifyMu" not in t:
+                  t = re.sub(
+                      r"(notify\s+\*notify\.Sender)",
+                      r"\1\n\tnotifyMu sync.Mutex // patched: guards notify reads/writes (v1.0.0 fix)",
+                      t,
+                      count=1,
+                  )
+                  # 2) Wrap SetNotifier body with mutex
+                  #    Original: func (p *Pool) SetNotifier(n *notify.Sender) {\n\tp.notify = n\n}
+                  t = re.sub(
+                      r"func \(p \*Pool\) SetNotifier\(n \*notify\.Sender\)\s*\{\s*\n\s*p\.notify = n\s*\n\}",
+                      "func (p *Pool) SetNotifier(n *notify.Sender) {\n\tp.notifyMu.Lock()\n\tdefer p.notifyMu.Unlock()\n\tp.notify = n\n}",
+                      t,
+                  )
+                  p.write_text(t, encoding="utf-8")
+                  print("  ✅ pool.go patched")
+              else:
+                  print("  ℹ️ pool.go already has notifyMu — skipping")
+              PY
+            else
+              echo "  ✅ internal/pool/pool.go already has notifyMu — no patch needed"
+            fi
+            # Verify patch
+            if grep -q "notifyMu" internal/pool/pool.go; then
+              echo "  ✅ Verified: notifyMu present"
+              grep -n "notifyMu\|SetNotifier" internal/pool/pool.go | head -n 20
+            else
+              echo "  ❌ Patch failed — notifyMu still missing"
+              exit 1
+            fi
+          else
+            echo "  ℹ️ internal/pool/pool.go not found — skipping patch"
+          fi
+
+          # --- Fix 2: Ensure go vet passes (optional sanity) ---
+          if [ -f "go.mod" ]; then
+            echo "📋 go.mod: $(head -n 5 go.mod)"
+          fi
+
+          echo "✅ Patch step complete"
+
       - name: 🔧 Set up QEMU
         uses: docker/setup-qemu-action@v3
 
