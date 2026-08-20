@@ -1,9 +1,38 @@
-name: 👀 Upstream Watcher
+﻿name: 👀 Upstream Watcher
 
 on:
   schedule:
     - cron: '*/10 * * * *'
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run — only log, do not delete (cleanup)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+      days:
+        description: 'Delete Upstream Watcher runs older than N days'
+        required: false
+        default: '7'
+        type: string
+      keep_minimum:
+        description: 'Keep at least N most recent Upstream Watcher runs'
+        required: false
+        default: '3'
+        type: string
+      docker_release_days:
+        description: 'Delete Docker Release runs older than N days'
+        required: false
+        default: '14'
+        type: string
+      docker_release_keep_minimum:
+        description: 'Keep at least N most recent Docker Release runs'
+        required: false
+        default: '5'
+        type: string
 
 permissions:
   contents: write
@@ -61,7 +90,6 @@ jobs:
             echo "🐳 Docker Hub $DH_REPO:$DOCKER_TAG → HTTP $HTTP_CODE"
             if [ "$HTTP_CODE" = "200" ]; then
               echo "   → exists on Docker Hub"
-              # Don't skip yet — check other registries too
               DH_EXISTS=true
             else
               DH_EXISTS=false
@@ -77,10 +105,8 @@ jobs:
           if [ "$GHCR_ENABLED" = "true" ]; then
             GH_IMAGE=$(echo "$CONFIG" | jq -r '.registry.ghcr.image_name')
             GHCR_REPO="ghcr.io/${{ github.repository_owner }}/$GH_IMAGE"
-            # Use GitHub Packages API — check if tag exists
             PKG_NAME="$GH_IMAGE"
             PKG_OWNER="${{ github.repository_owner }}"
-            # GHCR package names are lowercased
             PKG_OWNER_LC=$(echo "$PKG_OWNER" | tr '[:upper:]' '[:lower:]')
             PKG_NAME_LC=$(echo "$PKG_NAME" | tr '[:upper:]' '[:lower:]')
             VERSIONS_JSON=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
@@ -133,3 +159,168 @@ jobs:
             -f "client_payload[upstream_repo]=$UPSTREAM_REPO"
 
           echo "✅ Dispatched upstream-release → $TAG_NAME"
+
+  cleanup:
+    runs-on: ubuntu-latest
+    needs: check
+    if: always()
+    concurrency:
+      group: upstream-watcher-cleanup
+      cancel-in-progress: false
+    steps:
+      - name: 🧹 Cleanup old workflow runs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          RETENTION_DAYS: ${{ inputs.days || '7' }}
+          KEEP_MINIMUM: ${{ inputs.keep_minimum || '3' }}
+          DOCKER_RELEASE_DAYS: ${{ inputs.docker_release_days || '14' }}
+          DOCKER_RELEASE_KEEP_MINIMUM: ${{ inputs.docker_release_keep_minimum || '5' }}
+        run: |
+          set -euo pipefail
+
+          REPO="${{ github.repository }}"
+          DRY_RUN="${DRY_RUN:-false}"
+          RETENTION_DAYS="${RETENTION_DAYS:-7}"
+          KEEP_MINIMUM="${KEEP_MINIMUM:-3}"
+          DOCKER_RELEASE_DAYS="${DOCKER_RELEASE_DAYS:-14}"
+          DOCKER_RELEASE_KEEP_MINIMUM="${DOCKER_RELEASE_KEEP_MINIMUM:-5}"
+
+          for v in "$RETENTION_DAYS" "$KEEP_MINIMUM" "$DOCKER_RELEASE_DAYS" "$DOCKER_RELEASE_KEEP_MINIMUM"; do
+            if ! [[ "$v" =~ ^[0-9]+$ ]]; then
+              echo "❌ Invalid numeric value: $v (must be integer)"
+              exit 1
+            fi
+          done
+
+          CURRENT_RUN_ID="${{ github.run_id }}"
+
+          # ── Helper: cleanup a single workflow by path ─────────────────────
+          cleanup_workflow() {
+            local WF_PATH="$1"
+            local WF_LABEL="$2"
+            local DAYS="$3"
+            local KEEP="$4"
+            local SKIP_CURRENT="$5"  # true/false
+
+            local CUTOFF_EPOCH
+            CUTOFF_EPOCH=$(date -d "$DAYS days ago" +%s)
+            local CUTOFF_DATE
+            CUTOFF_DATE=$(date -d "@$CUTOFF_EPOCH" -u +"%Y-%m-%dT%H:%M:%SZ")
+
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "🔍 $WF_LABEL ($WF_PATH)"
+            echo "   📅 Retention: $DAYS days (cutoff: $CUTOFF_DATE)"
+            echo "   📌 Keep minimum: $KEEP most recent runs"
+            echo "   🧪 Dry run: $DRY_RUN"
+
+            local WF_ID
+            WF_ID=$(gh api --paginate "repos/$REPO/actions/workflows?per_page=100" --jq --arg p "$WF_PATH" '.workflows[] | select(.path==$p) | .id' | head -n1)
+            if [ -z "$WF_ID" ]; then
+              local WF_NAME_LOOKUP=""
+              if [ "$WF_PATH" = ".github/workflows/upstream-watcher.yml" ]; then
+                WF_NAME_LOOKUP="👀 Upstream Watcher"
+              elif [ "$WF_PATH" = ".github/workflows/docker-release.yml" ]; then
+                WF_NAME_LOOKUP="🐳 Docker Release Builder"
+              fi
+              if [ -n "$WF_NAME_LOOKUP" ]; then
+                WF_ID=$(gh api --paginate "repos/$REPO/actions/workflows?per_page=100" --jq --arg n "$WF_NAME_LOOKUP" '.workflows[] | select(.name==$n) | .id' | head -n1)
+              fi
+            fi
+
+            if [ -z "$WF_ID" ]; then
+              echo "   ⚠️ Workflow not found for $WF_PATH — skipping"
+              return 0
+            fi
+
+            local WF_NAME
+            WF_NAME=$(gh api "repos/$REPO/actions/workflows/$WF_ID" --jq '.name // .path')
+            echo "   🆔 Workflow: $WF_NAME (ID: $WF_ID)"
+
+            local RUNS_JSON
+            RUNS_JSON=$(gh api --paginate "repos/$REPO/actions/workflows/$WF_ID/runs?per_page=100" --jq '[.workflow_runs[]]')
+
+            local RUN_COUNT
+            RUN_COUNT=$(echo "$RUNS_JSON" | jq 'length')
+            if [ "$RUN_COUNT" -eq 0 ]; then
+              echo "   ℹ️ No runs"
+              return 0
+            fi
+
+            echo "   📊 Total runs: $RUN_COUNT"
+            if [ "$SKIP_CURRENT" = "true" ]; then
+              echo "   🏃 Current run: $CURRENT_RUN_ID (will be skipped)"
+            fi
+
+            local INDEX=0
+            local DELETED=0
+            local KEPT=0
+
+            while read -r RUN; do
+              INDEX=$((INDEX + 1))
+              local RUN_ID RUN_CREATED RUN_STATUS RUN_CONCLUSION RUN_NAME
+              RUN_ID=$(echo "$RUN" | jq -r '.id')
+              RUN_CREATED=$(echo "$RUN" | jq -r '.created_at')
+              RUN_STATUS=$(echo "$RUN" | jq -r '.status')
+              RUN_CONCLUSION=$(echo "$RUN" | jq -r '.conclusion // "n/a"')
+              RUN_NAME=$(echo "$RUN" | jq -r '.name // .display_title // "run"')
+
+              if [ "$SKIP_CURRENT" = "true" ] && [ "$RUN_ID" = "$CURRENT_RUN_ID" ]; then
+                echo "   ⏭️  Keep (current run) #$RUN_ID — $RUN_CREATED [$RUN_STATUS/$RUN_CONCLUSION]"
+                KEPT=$((KEPT+1))
+                continue
+              fi
+
+              if [ "$INDEX" -le "$KEEP" ]; then
+                echo "   ⏭️  Keep (top $KEEP) #$RUN_ID — $RUN_CREATED [$RUN_STATUS/$RUN_CONCLUSION] $RUN_NAME"
+                KEPT=$((KEPT+1))
+                continue
+              fi
+
+              if [ "$RUN_STATUS" != "completed" ]; then
+                echo "   ⏭️  Skip (not completed) #$RUN_ID — $RUN_CREATED [$RUN_STATUS]"
+                KEPT=$((KEPT+1))
+                continue
+              fi
+
+              local RUN_EPOCH
+              RUN_EPOCH=$(date -d "$RUN_CREATED" +%s)
+
+              if [ "$RUN_EPOCH" -lt "$CUTOFF_EPOCH" ]; then
+                if [ "$DRY_RUN" = "true" ]; then
+                  echo "   🧪 [dry-run] Would delete #$RUN_ID — $RUN_CREATED [$RUN_CONCLUSION] $RUN_NAME"
+                else
+                  echo "   🗑️  Deleting #$RUN_ID — $RUN_CREATED [$RUN_CONCLUSION] $RUN_NAME"
+                  if gh api -X DELETE "repos/$REPO/actions/runs/$RUN_ID" --silent 2>&1; then
+                    echo "      ✅ Deleted"
+                    DELETED=$((DELETED+1))
+                  else
+                    echo "      ⚠️ Failed to delete #$RUN_ID (may already be deleted)"
+                  fi
+                  sleep 0.3
+                fi
+              else
+                echo "   ⏭️  Keep (within retention) #$RUN_ID — $RUN_CREATED [$RUN_CONCLUSION]"
+                KEPT=$((KEPT+1))
+              fi
+            done < <(echo "$RUNS_JSON" | jq -c '.[]')
+
+            echo "   ── $WF_LABEL summary: deleted $DELETED, kept $KEPT (cutoff $CUTOFF_DATE, keep $KEEP)"
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "   🧪 Dry run — no deletions for $WF_LABEL"
+            fi
+          }
+
+          echo "📋 Repo: $REPO"
+          echo "🧹 Starting cleanup for 2 workflows..."
+
+          # 1) Upstream Watcher — self-cleanup (skip current run)
+          cleanup_workflow ".github/workflows/upstream-watcher.yml" "👀 Upstream Watcher" "$RETENTION_DAYS" "$KEEP_MINIMUM" "true"
+
+          # 2) Docker Release — cleanup old runs (no need to skip current, different workflow)
+          cleanup_workflow ".github/workflows/docker-release.yml" "🐳 Docker Release Builder" "$DOCKER_RELEASE_DAYS" "$DOCKER_RELEASE_KEEP_MINIMUM" "false"
+
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ All cleanups complete"
