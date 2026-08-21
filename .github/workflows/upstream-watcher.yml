@@ -62,12 +62,34 @@ jobs:
 
           echo "🔍 Checking upstream: $UPSTREAM_REPO"
 
-          LATEST_JSON=$(curl -sL --fail "https://api.github.com/repos/$UPSTREAM_REPO/releases/latest")
-          TAG_NAME=$(echo "$LATEST_JSON" | jq -r '.tag_name')
+          # Fetch upstream latest with retry (handles transient 403/429/5xx)
+          LATEST_JSON=""
+          TAG_NAME=""
+          for attempt in 1 2 3; do
+            LATEST_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/$UPSTREAM_REPO/releases/latest" 2>&1 || true)
+            TAG_NAME=$(echo "$LATEST_JSON" | jq -r '.tag_name // empty' 2>/dev/null || true)
+            if [ -n "$TAG_NAME" ] && [ "$TAG_NAME" != "null" ]; then
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "⚠️ Attempt $attempt failed, retrying in 5s..."
+              sleep 5
+            fi
+          done
+          # Fallback to unauthenticated if still empty (rate-limit edge)
+          if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" = "null" ]; then
+            echo "⚠️ Authenticated fetch failed, retrying without auth..."
+            LATEST_JSON=$(curl -sL "https://api.github.com/repos/$UPSTREAM_REPO/releases/latest" 2>&1 || true)
+            TAG_NAME=$(echo "$LATEST_JSON" | jq -r '.tag_name // empty' 2>/dev/null || true)
+          fi
 
           if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" = "null" ]; then
-            echo "❌ Failed to fetch upstream tag"
-            exit 1
+            MSG=$(echo "$LATEST_JSON" | jq -r '.message // "unknown error"' 2>/dev/null || echo "unknown")
+            echo "❌ Failed to fetch upstream tag: $MSG"
+            echo "Response: $(echo "$LATEST_JSON" | head -c 800)"
+            # Don't fail the whole workflow on transient API error — exit 0 to allow cleanup to run
+            echo "⚠️ Upstream API unavailable, skipping dispatch but continuing to cleanup"
+            exit 0
           fi
 
           VERSION=${TAG_NAME#v}
@@ -216,7 +238,7 @@ jobs:
             echo "   🧪 Dry run: $DRY_RUN"
 
             local WF_ID
-            WF_ID=$(gh api --paginate "repos/$REPO/actions/workflows?per_page=100" --jq --arg p "$WF_PATH" '.workflows[] | select(.path==$p) | .id' | head -n1)
+            WF_ID=$(gh api "repos/$REPO/actions/workflows" --paginate | jq -r --arg p "$WF_PATH" '.workflows[] | select(.path==$p) | .id' | head -n1)
             if [ -z "$WF_ID" ]; then
               local WF_NAME_LOOKUP=""
               if [ "$WF_PATH" = ".github/workflows/upstream-watcher.yml" ]; then
@@ -225,7 +247,7 @@ jobs:
                 WF_NAME_LOOKUP="🐳 Docker Release Builder"
               fi
               if [ -n "$WF_NAME_LOOKUP" ]; then
-                WF_ID=$(gh api --paginate "repos/$REPO/actions/workflows?per_page=100" --jq --arg n "$WF_NAME_LOOKUP" '.workflows[] | select(.name==$n) | .id' | head -n1)
+                WF_ID=$(gh api "repos/$REPO/actions/workflows" --paginate | jq -r --arg n "$WF_NAME_LOOKUP" '.workflows[] | select(.name==$n) | .id' | head -n1)
               fi
             fi
 
@@ -239,7 +261,7 @@ jobs:
             echo "   🆔 Workflow: $WF_NAME (ID: $WF_ID)"
 
             local RUNS_JSON
-            RUNS_JSON=$(gh api --paginate "repos/$REPO/actions/workflows/$WF_ID/runs?per_page=100" --jq '[.workflow_runs[]]')
+            RUNS_JSON=$(gh api "repos/$REPO/actions/workflows/$WF_ID/runs" --paginate | jq -c '[.workflow_runs[]]')
 
             local RUN_COUNT
             RUN_COUNT=$(echo "$RUNS_JSON" | jq 'length')
