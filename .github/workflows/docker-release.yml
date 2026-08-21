@@ -102,7 +102,7 @@ jobs:
           echo "notify_mode=$NOTIFY_MODE" >> $GITHUB_OUTPUT
           echo "cache_enabled=$CACHE_ENABLED" >> $GITHUB_OUTPUT
 
-          # Resolve upstream tag — prefer dispatch payload, fallback to latest API (with retry + auth)
+          # Resolve upstream tag — prefer dispatch payload, fallback to latest API (with retry + auth + gh fallback)
           DISPATCH_TAG="${{ github.event.client_payload.tag }}"
           if [ -n "$DISPATCH_TAG" ] && [ "$DISPATCH_TAG" != "" ]; then
             echo "📨 Triggered by upstream-release dispatch: $DISPATCH_TAG"
@@ -119,6 +119,10 @@ jobs:
                 sleep 5
               fi
             done
+            if [ -z "$LATEST" ] || [ "$LATEST" = "null" ] || ! echo "$LATEST" | jq -e '.tag_name' > /dev/null 2>&1; then
+              echo "⚠️ curl failed for tag $TAG_NAME, trying gh api..."
+              LATEST=$(gh api "repos/$UPSTREAM_REPO/releases/tags/$TAG_NAME" 2>&1 || true)
+            fi
             if [ -z "$LATEST" ] || [ "$LATEST" = "null" ] || ! echo "$LATEST" | jq -e '.tag_name' > /dev/null 2>&1; then
               echo "❌ Failed to fetch upstream release for tag $TAG_NAME"
               echo "Response: $(echo "$LATEST" | head -c 800)"
@@ -138,12 +142,27 @@ jobs:
               fi
             done
             if [ -z "$LATEST" ] || [ "$LATEST" = "null" ] || ! echo "$LATEST" | jq -e '.tag_name' > /dev/null 2>&1; then
-              echo "⚠️ Authenticated fetch failed, retrying without auth..."
+              echo "⚠️ curl failed, trying gh api..."
+              LATEST=$(gh api "repos/$UPSTREAM_REPO/releases/latest" 2>&1 || true)
+            fi
+            if [ -z "$LATEST" ] || [ "$LATEST" = "null" ] || ! echo "$LATEST" | jq -e '.tag_name' > /dev/null 2>&1; then
+              echo "⚠️ gh api also failed, retrying without auth via curl..."
               LATEST=$(curl -sL "https://api.github.com/repos/$UPSTREAM_REPO/releases/latest" 2>&1 || true)
             fi
             if [ -z "$LATEST" ] || [ "$LATEST" = "null" ] || ! echo "$LATEST" | jq -e '.tag_name' > /dev/null 2>&1; then
-              echo "❌ Failed to fetch upstream release"
+              MSG=$(echo "$LATEST" | jq -r '.message // "unknown error"' 2>/dev/null || echo "unknown")
+              echo "❌ Failed to fetch upstream release: $MSG"
               echo "Response: $(echo "$LATEST" | head -c 800)"
+              # Handle 404 (no releases) gracefully — don't fail, just skip build
+              if echo "$LATEST" | jq -e 'select(.message == "Not Found")' > /dev/null 2>&1; then
+                echo "⚠️ Upstream has no releases (404) — skipping build"
+                echo "should_build=false" >> $GITHUB_OUTPUT
+                echo "upstream_tag=" >> $GITHUB_OUTPUT
+                echo "upstream_version=" >> $GITHUB_OUTPUT
+                echo "upstream_tarball=" >> $GITHUB_OUTPUT
+                echo "upstream_zipball=" >> $GITHUB_OUTPUT
+                exit 0
+              fi
               exit 1
             fi
             TAG_NAME=$(echo "$LATEST" | jq -r '.tag_name')

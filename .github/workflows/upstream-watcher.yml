@@ -62,7 +62,7 @@ jobs:
 
           echo "🔍 Checking upstream: $UPSTREAM_REPO"
 
-          # Fetch upstream latest with retry (handles transient 403/429/5xx)
+          # Fetch upstream latest with retry (handles transient 403/429/5xx) + gh fallback
           LATEST_JSON=""
           TAG_NAME=""
           for attempt in 1 2 3; do
@@ -76,9 +76,13 @@ jobs:
               sleep 5
             fi
           done
-          # Fallback to unauthenticated if still empty (rate-limit edge)
           if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" = "null" ]; then
-            echo "⚠️ Authenticated fetch failed, retrying without auth..."
+            echo "⚠️ curl failed, trying gh api..."
+            LATEST_JSON=$(gh api "repos/$UPSTREAM_REPO/releases/latest" 2>&1 || true)
+            TAG_NAME=$(echo "$LATEST_JSON" | jq -r '.tag_name // empty' 2>/dev/null || true)
+          fi
+          if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" = "null" ]; then
+            echo "⚠️ gh api also failed, retrying without auth via curl..."
             LATEST_JSON=$(curl -sL "https://api.github.com/repos/$UPSTREAM_REPO/releases/latest" 2>&1 || true)
             TAG_NAME=$(echo "$LATEST_JSON" | jq -r '.tag_name // empty' 2>/dev/null || true)
           fi
@@ -87,8 +91,11 @@ jobs:
             MSG=$(echo "$LATEST_JSON" | jq -r '.message // "unknown error"' 2>/dev/null || echo "unknown")
             echo "❌ Failed to fetch upstream tag: $MSG"
             echo "Response: $(echo "$LATEST_JSON" | head -c 800)"
-            # Don't fail the whole workflow on transient API error — exit 0 to allow cleanup to run
-            echo "⚠️ Upstream API unavailable, skipping dispatch but continuing to cleanup"
+            if echo "$LATEST_JSON" | jq -e 'select(.message == "Not Found")' > /dev/null 2>&1; then
+              echo "⚠️ Upstream has no releases (404) — skipping dispatch"
+            else
+              echo "⚠️ Upstream API unavailable, skipping dispatch but continuing to cleanup"
+            fi
             exit 0
           fi
 
