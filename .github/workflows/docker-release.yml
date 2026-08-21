@@ -102,22 +102,48 @@ jobs:
           echo "notify_mode=$NOTIFY_MODE" >> $GITHUB_OUTPUT
           echo "cache_enabled=$CACHE_ENABLED" >> $GITHUB_OUTPUT
 
-          # Resolve upstream tag — prefer dispatch payload, fallback to latest API
+          # Resolve upstream tag — prefer dispatch payload, fallback to latest API (with retry + auth)
           DISPATCH_TAG="${{ github.event.client_payload.tag }}"
           if [ -n "$DISPATCH_TAG" ] && [ "$DISPATCH_TAG" != "" ]; then
             echo "📨 Triggered by upstream-release dispatch: $DISPATCH_TAG"
             TAG_NAME="$DISPATCH_TAG"
             VERSION=${TAG_NAME#v}
-            LATEST=$(curl -sL --fail "https://api.github.com/repos/$UPSTREAM_REPO/releases/tags/$TAG_NAME")
-            if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
+            LATEST=""
+            for attempt in 1 2 3; do
+              LATEST=$(curl -sL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/$UPSTREAM_REPO/releases/tags/$TAG_NAME" 2>&1 || true)
+              if [ -n "$LATEST" ] && [ "$LATEST" != "null" ] && echo "$LATEST" | jq -e '.tag_name' > /dev/null 2>&1; then
+                break
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                echo "⚠️ Attempt $attempt failed for tag $TAG_NAME, retrying in 5s..."
+                sleep 5
+              fi
+            done
+            if [ -z "$LATEST" ] || [ "$LATEST" = "null" ] || ! echo "$LATEST" | jq -e '.tag_name' > /dev/null 2>&1; then
               echo "❌ Failed to fetch upstream release for tag $TAG_NAME"
+              echo "Response: $(echo "$LATEST" | head -c 800)"
               exit 1
             fi
           else
             echo "🔍 Fetching latest release from $UPSTREAM_REPO..."
-            LATEST=$(curl -sL --fail "https://api.github.com/repos/$UPSTREAM_REPO/releases/latest")
-            if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
+            LATEST=""
+            for attempt in 1 2 3; do
+              LATEST=$(curl -sL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/$UPSTREAM_REPO/releases/latest" 2>&1 || true)
+              if [ -n "$LATEST" ] && [ "$LATEST" != "null" ] && echo "$LATEST" | jq -e '.tag_name' > /dev/null 2>&1; then
+                break
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                echo "⚠️ Attempt $attempt failed, retrying in 5s..."
+                sleep 5
+              fi
+            done
+            if [ -z "$LATEST" ] || [ "$LATEST" = "null" ] || ! echo "$LATEST" | jq -e '.tag_name' > /dev/null 2>&1; then
+              echo "⚠️ Authenticated fetch failed, retrying without auth..."
+              LATEST=$(curl -sL "https://api.github.com/repos/$UPSTREAM_REPO/releases/latest" 2>&1 || true)
+            fi
+            if [ -z "$LATEST" ] || [ "$LATEST" = "null" ] || ! echo "$LATEST" | jq -e '.tag_name' > /dev/null 2>&1; then
               echo "❌ Failed to fetch upstream release"
+              echo "Response: $(echo "$LATEST" | head -c 800)"
               exit 1
             fi
             TAG_NAME=$(echo "$LATEST" | jq -r '.tag_name')
